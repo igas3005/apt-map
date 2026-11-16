@@ -113,10 +113,10 @@ const tradesOf = id => LIVE.get(id) || [];
 /* ---------- 건축물대장 표제부: 세대수·사용승인연도·층수 ---------- */
 // 단지 지번으로 조회하고, 결과는 바뀌지 않는 값이라 이 브라우저에 저장해 다시 조회하지 않는다.
 const BLD_API = 'https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo';
-let BLD = {}; try { BLD = JSON.parse(localStorage.getItem('bld_v1') || '{}') || {}; } catch (e) {}
+let BLD = {}; try { BLD = JSON.parse(localStorage.getItem('bld_v2') || '{}') || {}; } catch (e) {}
 const BY = new Map(); let bldSaveT = 0, bldErr = null;
 const bkey = c => c.code + '|' + c.umd + '|' + c.jibun;
-function bldSave() { clearTimeout(bldSaveT); bldSaveT = setTimeout(() => { try { localStorage.setItem('bld_v1', JSON.stringify(BLD)); } catch (e) {} }, 800); }
+function bldSave() { clearTimeout(bldSaveT); bldSaveT = setTimeout(() => { try { localStorage.setItem('bld_v2', JSON.stringify(BLD)); } catch (e) {} }, 800); }
 function regionCode(c) { return new Promise(res => geocoder.coord2RegionCode(c.lon, c.lat, (r, st) => {
   if (st !== kakao.maps.services.Status.OK) return res(null); const b = r.find(x => x.region_type === 'B'); res(b && b.code ? String(b.code) : null); })); }
 async function fetchBld(c) {
@@ -141,7 +141,7 @@ async function fetchBld(c) {
   }
   let use = rows.filter(x => x.main && x.hh > 0); if (!use.length) use = rows.filter(x => x.main); if (!use.length) return 0;
   const ys = use.map(x => x.y).filter(y => y > 1900);
-  return [use.reduce((a, x) => a + x.hh, 0), ys.length ? Math.min(...ys) : 0, Math.max(...use.map(x => x.up)), Math.max(...use.map(x => x.dn)), use.filter(x => x.hh > 0).length];
+  return [use.reduce((a, x) => a + x.hh, 0), ys.length ? Math.min(...ys) : 0, Math.max(...use.map(x => x.up)), Math.max(...rows.map(x => x.dn)), use.filter(x => x.hh > 0).length];  // 지하층은 지하주차장 등 세대 없는 동·부속건축물까지 포함해 최댓값
 }
 async function loadBld(tok) {
   if (!KEY || bldErr || !geocoder) return;
