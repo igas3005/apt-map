@@ -236,6 +236,170 @@ function summarize(id) {
   return { n: arr.length, type: best.k, py: pyeong(best.k), cnt: best.v.length, latest, med: m, val: S.metric === 'latest' ? latest[3] : m };
 }
 
+/* ---------- 분양권·입주권 실거래 + 청약홈 분양정보·경쟁률 ---------- */
+const SILV_API = 'https://apis.data.go.kr/1613000/RTMSDataSvcSilvTrade/getRTMSDataSvcSilvTrade';
+const OD = 'https://api.odcloud.kr/api/';
+const SIDO_OF = { '11': '서울', '41': '경기', '28': '인천' };
+const SILVC = new Map(), SILVG = new Map(), SDONE = new Set(), SALES = new Map(), SALEX = new Map();
+let GEO = {}; try { GEO = JSON.parse(localStorage.getItem('geo_v1') || '{}') || {}; } catch (e) {}
+let XOV = [], xsel = null, geoT = 0;
+const X = { sales: [], silv: [], err: [] };
+function geocodeAddr(addr) {
+  if (GEO[addr]) return Promise.resolve(GEO[addr]);
+  return new Promise(res => geocoder.addressSearch(addr, (r, st) => {
+    const v = (st === kakao.maps.services.Status.OK && r[0]) ? [+r[0].y, +r[0].x] : null;
+    if (v) { GEO[addr] = v; clearTimeout(geoT); geoT = setTimeout(() => { try { localStorage.setItem('geo_v1', JSON.stringify(GEO)); } catch (e) {} }, 800); }
+    res(v); }));
+}
+async function geocodeLoose(addr) {
+  const a = String(addr || '').replace(/\(.*?\)/g, ' ').replace(/(일원|일대|번지|외\s*\d+\s*필지).*$/, '').replace(/\s+/g, ' ').trim();
+  const toks = a.split(' ');
+  for (let k = 0; k < 3 && toks.length >= 3; k++) { const v = await geocodeAddr(toks.join(' ')); if (v) return v; toks.pop(); }
+  return null;
+}
+function centerRegion() { return new Promise(res => geocoder.coord2RegionCode(S.center.lon, S.center.lat, (r, st) => {
+  if (st !== kakao.maps.services.Status.OK) return res(null); const b = r.find(x => x.region_type === 'B'); res(b || null); })); }
+async function silvMonth(f, ym) {
+  let key = KEY; try { key = decodeURIComponent(KEY); } catch (e) {}
+  for (let page = 1; page <= 5; page++) {
+    let r; try { r = await fetch(SILV_API + '?' + new URLSearchParams({ serviceKey: key, LAWD_CD: f, DEAL_YMD: ym, pageNo: page, numOfRows: 1000 })); } catch (e) { throw { kind: 'net' }; }
+    if (r.status === 401 || r.status === 403) throw { kind: 'key', msg: 'HTTP ' + r.status };
+    if (!r.ok) throw { kind: 'api', msg: 'HTTP ' + r.status };
+    const out = parseAny(await r.text());
+    for (const o of out.items) {
+      if (String(o.cdealType || '').toUpperCase() === 'O' || o.cdealDay) continue;
+      const amt = parseInt(String(o.dealAmount || '').replace(/,/g, ''), 10), area = Math.round(parseFloat(o.excluUseAr) * 100) / 100;
+      const ymd = (+o.dealYear) * 10000 + (+o.dealMonth) * 100 + (+o.dealDay);
+      if (!amt || !area || !ymd) continue;
+      const t = [ymd, area, parseInt(o.floor, 10) || 0, amt, o.ownershipGbn || o.ownershipGbnNm || ''];
+      const nm = o.aptNm || o.aptName || '', id = matchRow(f, o.umdNm || '', o.jibun || '', nm);
+      if (id != null) push(SILVC, id, t);
+      else { const k = f + '|' + (o.umdNm || '') + '|' + (o.jibun || '') + '|' + nn(nm);
+        if (!SILVG.has(k)) SILVG.set(k, { key: k, code: f, umd: o.umdNm || '', jibun: o.jibun || '', name: nm, sgg: o.sggNm || '', trades: [] });
+        SILVG.get(k).trades.push(t); }
+    }
+    if (page * 1000 >= out.total || !out.items.length) break;
+  }
+  SDONE.add(f + '|' + ym);
+}
+async function ensureSilv(codes) {
+  const seen = new Set(), jobs = [];
+  for (const c of codes) for (const f of [c].concat(LEGACY[c] || [])) for (const ym of monthList(S.months)) { const k = f + '|' + ym; if (!SDONE.has(k) && !seen.has(k)) { seen.add(k); jobs.push([f, ym]); } }
+  let k = 0, err = null;
+  const worker = async () => { while (k < jobs.length && !err) { const j = jobs[k++]; try { await silvMonth(j[0], j[1]); } catch (e) { err = e; } } };
+  await Promise.all(Array.from({ length: 6 }, worker));
+  if (err) X.err.push('분양권 실거래: ' + (err.kind === 'net' ? '접속 실패' : (err.kind + ' ' + (err.msg || ''))));
+}
+async function odGet(path, cond) {
+  let key = KEY; try { key = decodeURIComponent(KEY); } catch (e) {}
+  const q = new URLSearchParams({ page: 1, perPage: 1000, serviceKey: key }); for (const k in cond) q.set(`cond[${k}]`, cond[k]);
+  let r; try { r = await fetch(OD + path + '?' + q); } catch (e) { throw { kind: 'net' }; }
+  if (!r.ok) throw { kind: r.status === 401 || r.status === 403 ? 'key' : 'api', msg: 'HTTP ' + r.status };
+  const j = await r.json(); return Array.isArray(j.data) ? j.data : [];
+}
+function salesOf(sido) {
+  if (!SALES.has(sido)) { const d = new Date(S.asOf.getFullYear() - 2, S.asOf.getMonth(), S.asOf.getDate());
+    const from = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    SALES.set(sido, odGet('ApplyhomeInfoDetailSvc/v1/getAPTLttotPblancDetail', { 'SUBSCRPT_AREA_CODE_NM::EQ': sido, 'RCRIT_PBLANC_DE::GTE': from }).catch(e => { SALES.delete(sido); throw e; })); }
+  return SALES.get(sido);
+}
+async function loadExtras(tok) {
+  if (!KEY || !S.center) return;
+  X.err = [];
+  const codes = new Set(S.list.map(i => C[i.id].code)), gus = new Map();
+  for (const i of S.list) { const c = C[i.id]; gus.set(c.code, c.gu); }
+  const reg = await centerRegion();
+  if (reg && reg.code) { const c5 = String(reg.code).slice(0, 5); if (SIDO_OF[c5.slice(0, 2)]) { codes.add(c5); if (!gus.has(c5)) gus.set(c5, reg.region_2depth_name || ''); } }
+  if (tok !== S.token || !codes.size) return;
+  const sidos = new Set([...codes].map(c => SIDO_OF[c.slice(0, 2)]).filter(Boolean));
+  const saleRows = [];
+  await Promise.all([ensureSilv(codes), ...[...sidos].map(sd => salesOf(sd).then(rows => saleRows.push(...rows)).catch(e => X.err.push('청약홈 분양정보: ' + (e.kind === 'net' ? '접속 실패' : (e.kind + ' ' + (e.msg || ''))))))]);
+  if (tok !== S.token) return;
+  // 청약홈 단지: 같은 시군구만 좌표 변환 후 반경 안인 것
+  const guToks = [...gus.values()].filter(Boolean).map(g => g.split(' '));
+  const cand = saleRows.filter(r => { const a = String(r.HSSPLY_ADRES || ''); return guToks.some(t => t.every(x => a.includes(x))); });
+  if (saleRows.length && saleRows[0].HSSPLY_ADRES === undefined) X.err.push('청약홈 응답 항목이 예상과 달라요: ' + Object.keys(saleRows[0]).slice(0, 12).join(', '));
+  const sales = [];
+  await Promise.all(cand.map(async r => { const g = await geocodeLoose(r.HSSPLY_ADRES); if (!g) return;
+    const d = hav(S.center.lat, S.center.lon, g[0], g[1]); if (d <= S.rad) sales.push({ id: String(r.HOUSE_MANAGE_NO), name: r.HOUSE_NM || '', addr: r.HSSPLY_ADRES, lat: g[0], lon: g[1], d, r }); }));
+  // 분양권 단지: 목록에 없는 단지를 지번으로 좌표 변환
+  const cut = cutoff(), silv = [];
+  await Promise.all([...SILVG.values()].filter(g => codes.has(g.code) || [...codes].some(c => (LEGACY[c] || []).includes(g.code))).map(async g => {
+    const tr = g.trades.filter(t => t[0] >= cut); if (!tr.length) return;
+    const gu = gus.get(g.code) || g.sgg || '', sd = SIDO_OF[g.code.slice(0, 2)] || '';
+    const p = await geocodeAddr(`${sd} ${gu} ${g.umd} ${g.jibun}`.replace(/\s+/g, ' ').trim()); if (!p) return;
+    const d = hav(S.center.lat, S.center.lon, p[0], p[1]); if (d > S.rad) return;
+    const near = sales.find(x => hav(x.lat, x.lon, p[0], p[1]) < 400 && (nn(x.name).includes(nn(g.name)) || nn(g.name).includes(nn(x.name))));
+    if (near) { near.trades = (near.trades || []).concat(tr); return; }
+    silv.push({ key: g.key, name: g.name, addr: `${gu} ${g.umd} ${g.jibun}`, lat: p[0], lon: p[1], d, trades: tr }); }));
+  if (tok !== S.token) return;
+  X.sales = sales.sort((a, b) => a.d - b.d); X.silv = silv.sort((a, b) => a.d - b.d);
+  renderExtraPins(); renderList(); if (S.sel != null) renderDetail();
+  if (X.err.length && !S.liveErr) status(X.err.join(' / ') + ' — 이 문구를 그대로 알려 주세요.', true);
+}
+function silvBest(tr) { const b = dominant(tr); const latest = b.v.reduce((x, y) => (y[0] > x[0] ? y : x)); return { py: pyeong(b.k), val: latest[3], n: tr.length }; }
+function renderExtraPins() {
+  XOV.forEach(o => o.setMap(null)); XOV = [];
+  if (!map) return;
+  const add = (lat, lon, cls, html, title, fn, z) => { const el = document.createElement('div'); el.className = 'pin ' + cls; el.innerHTML = html; el.title = title;
+    el.addEventListener('click', e => { e.stopPropagation(); fn(); });
+    const ov = new kakao.maps.CustomOverlay({ position: new kakao.maps.LatLng(lat, lon), content: el, xAnchor: .12, yAnchor: 1, zIndex: z, clickable: true }); ov.setMap(map); XOV.push(ov); };
+  for (const x of X.sales) { if (NOTICES.some(n => n.id === x.id)) continue;
+    add(x.lat, x.lon, 'spin' + (xsel === 's' + x.id ? ' sel' : ''), `<small>분양 ${esc(String(x.r.RCRIT_PBLANC_DE || '').slice(2, 7))}</small><b>${esc(x.name.length > 12 ? x.name.slice(0, 12) + '…' : x.name)}</b>`, x.name, () => openSale(x.id), 25); }
+  for (const g of X.silv) { const b = silvBest(g.trades);
+    add(g.lat, g.lon, 'vpin' + (xsel === 'v' + g.key ? ' sel' : ''), `<small>분양권 ${b.py}평</small><b>${eok(b.val)}</b>`, g.name, () => openSilv(g.key), 22); }
+}
+function silvTable(tr) {
+  return '<table><tr><th>계약일</th><th>구분</th><th>전용</th><th>층</th><th>거래가</th></tr>' + tr.slice().sort((a, b) => b[0] - a[0]).slice(0, 20).map(t =>
+    `<tr><td>${ds(t[0])}</td><td>${esc(t[4] || '-')}</td><td>${t[1]}㎡ (${pyeong(t[1])}평)</td><td>${t[2]}</td><td><b>${eokFull(t[3])}</b></td></tr>`).join('') + '</table>' + (tr.length > 20 ? `<div class="note">최근 20건만 표시 (전체 ${tr.length}건)</div>` : '');
+}
+function rawTable(rows) { if (!rows.length) return ''; const ks = Object.keys(rows[0]);
+  return '<div class="note">항목 이름이 예상과 달라 원자료 그대로 표시해요. 이 표를 알려 주세요.</div><div style="overflow:auto"><table><tr>' + ks.map(k => `<th>${esc(k)}</th>`).join('') + '</tr>' + rows.slice(0, 30).map(r => '<tr>' + ks.map(k => `<td>${esc(r[k] == null ? '' : r[k])}</td>`).join('') + '</tr>').join('') + '</table></div>'; }
+async function saleExtra(id) {       // 주택형별 공급·최고분양가 + 경쟁률
+  if (!KEY) return '<div class="note">국토부 인증키를 입력하면 청약 경쟁률이 표시돼요.</div>';
+  if (!SALEX.has(id)) SALEX.set(id, Promise.all([
+    odGet('ApplyhomeInfoDetailSvc/v1/getAPTLttotPblancMdl', { 'HOUSE_MANAGE_NO::EQ': id }).catch(e => ({ err: e })),
+    odGet('ApplyhomeInfoCmpetRtSvc/v1/getAPTLttotPblancCmpet', { 'HOUSE_MANAGE_NO::EQ': id }).catch(e => ({ err: e }))]));
+  const [mdl, cmp] = await SALEX.get(id); const num = v => (v == null || v === '') ? '-' : (isNaN(+String(v).replace(/,/g, '')) ? esc(v) : Number(String(v).replace(/,/g, '')).toLocaleString('ko-KR'));
+  const er = e => `<div class="note">조회 실패 (${esc(e.kind || '')} ${esc(e.msg || '')}). 활용신청 승인 반영 전이거나 브라우저 접속이 막혔을 수 있어요.</div>`;
+  let h = '<div class="sec">주택형별 공급 (청약홈)</div>';
+  if (mdl.err) h += er(mdl.err); else if (!mdl.length) h += '<div class="note">자료 없음</div>';
+  else if (mdl[0].HOUSE_TY === undefined) h += rawTable(mdl);
+  else h += '<table><tr><th>주택형</th><th>공급면적㎡</th><th>일반</th><th>특별</th><th>최고 분양가(만원)</th></tr>' + mdl.map(m => `<tr><td>${esc(m.HOUSE_TY)}</td><td>${esc(m.SUPLY_AR == null ? '-' : m.SUPLY_AR)}</td><td>${num(m.SUPLY_HSHLDCO)}</td><td>${num(m.SPSPLY_HSHLDCO)}</td><td><b>${num(m.LTTOT_TOP_AMOUNT)}</b></td></tr>`).join('') + '</table><div class="note">분양가는 주택형별 최고가 기준이에요. 층별 가격은 모집공고문에 있어요.</div>';
+  h += '<div class="sec">청약 경쟁률 (청약홈, 일반공급)</div>';
+  if (cmp.err) h += er(cmp.err); else if (!cmp.length) h += '<div class="note">아직 경쟁률 자료가 없어요 (청약 전이거나 미집계).</div>';
+  else if (cmp[0].HOUSE_TY === undefined || cmp[0].CMPET_RATE === undefined) h += rawTable(cmp);
+  else h += '<table><tr><th>주택형</th><th>순위</th><th>거주</th><th>공급</th><th>접수</th><th>경쟁률</th></tr>' + cmp.slice().sort((a, b) => String(a.HOUSE_TY).localeCompare(String(b.HOUSE_TY)) || (a.SUBSCRPT_RANK_CODE - b.SUBSCRPT_RANK_CODE)).map(c =>
+    `<tr><td>${esc(c.HOUSE_TY)}</td><td>${esc(c.SUBSCRPT_RANK_CODE)}순위</td><td>${esc(c.RESIDE_SENM || c.RESIDE_SECD || '')}</td><td>${num(c.SUPLY_HSHLDCO)}</td><td>${num(c.REQ_CNT)}</td><td><b>${esc(c.CMPET_RATE == null ? '-' : c.CMPET_RATE)}</b></td></tr>`).join('') + '</table>';
+  return h;
+}
+async function openSale(id) {
+  const x = X.sales.find(s => s.id === id); if (!x) return;
+  if (NOTICES.some(n => n.id === id)) return openNotice(id, false);
+  xsel = 's' + id; noticeSel = null; S.sel = null; renderPins(); renderExtraPins(); renderNoticePins();
+  const r = x.r, el = $('#detail'); el.hidden = false; el.scrollIntoView({ block: 'nearest' });
+  const row = (k, v) => v ? `<tr><td>${k}</td><td>${esc(v)}</td></tr>` : '';
+  let h = `<button class="x" id="dx">닫기</button><h2>${esc(x.name)}</h2><div class="ad">${esc(x.addr)}</div>`;
+  if (r.PBLANC_URL) h += `<a class="dl" href="${esc(r.PBLANC_URL)}" target="_blank" rel="noopener">청약홈 모집공고 보기</a>`;
+  h += '<table class="kvt">' + row('모집공고일', r.RCRIT_PBLANC_DE) + row('공급세대', r.TOT_SUPLY_HSHLDCO) + row('청약접수', (r.RCEPT_BGNDE || '') + (r.RCEPT_ENDDE ? ' ~ ' + r.RCEPT_ENDDE : '')) + row('당첨자 발표', r.PRZWNER_PRESNATN_DE) +
+    row('계약', (r.CNTRCT_CNCLS_BGNDE || '') + (r.CNTRCT_CNCLS_ENDDE ? ' ~ ' + r.CNTRCT_CNCLS_ENDDE : '')) + row('입주예정', r.MVN_PREARNGE_YM) + row('시공사', r.CNSTRCT_ENTRPS_NM) + row('사업주체', r.BSNS_MBY_NM) + row('주택구분', r.HOUSE_DTL_SECD_NM || r.HOUSE_SECD_NM) + '</table>';
+  h += '<div id="sx"><div class="note">주택형·경쟁률 불러오는 중…</div></div>';
+  if (x.trades && x.trades.length) h += `<div class="sec">분양권·입주권 실거래 (최근 ${S.months}개월, ${x.trades.length}건)</div>` + silvTable(x.trades);
+  h += '<div class="note">세부 분양가·발코니 확장비·중도금 조건은 모집공고문 분석이 필요해요. 공고문을 Claude에게 보내면 요약과 PPT로 만들어 여기에 올릴 수 있어요.</div>';
+  el.innerHTML = h; $('#dx').onclick = () => { xsel = null; el.hidden = true; renderExtraPins(); };
+  const ex = await saleExtra(id); const sx = document.getElementById('sx'); if (sx && xsel === 's' + id) sx.innerHTML = ex;
+}
+function openSilv(key) {
+  const g = X.silv.find(s => s.key === key); if (!g) return;
+  xsel = 'v' + key; noticeSel = null; S.sel = null; renderPins(); renderExtraPins(); renderNoticePins();
+  const el = $('#detail'); el.hidden = false; el.scrollIntoView({ block: 'nearest' });
+  const am = g.trades.map(t => t[3]);
+  el.innerHTML = `<button class="x" id="dx">닫기</button><h2>${esc(g.name)}</h2><div class="ad">${esc(g.addr)} · 분양권·입주권 거래 단지</div>` +
+    `<div class="kv"><div><small>거래 ${g.trades.length}건 중위</small><b>${eokFull(med(am))}</b></div><div><small>최고</small><b>${eokFull(Math.max(...am))}</b></div><div><small>최저</small><b>${eokFull(Math.min(...am))}</b></div></div>` +
+    `<div class="sec">분양권·입주권 실거래 (최근 ${S.months}개월)</div>` + silvTable(g.trades) + '<div class="note">아직 단지 목록에 없는(입주 전) 단지예요. 위치는 신고 지번을 좌표로 바꾼 값이라 실제와 조금 다를 수 있어요.</div>';
+  $('#dx').onclick = () => { xsel = null; el.hidden = true; renderExtraPins(); };
+}
+
 /* ---------- 분양 분석 (모집공고 요약) ---------- */
 // data/notices/index.json 에 올라온 단지를 지도에 표시하고, 누르면 요약과 PPT 내려받기를 보여 준다.
 let NOTICES = [], NOV = [], noticeSel = null; const NJSON = new Map();
@@ -257,7 +421,7 @@ function renderNoticePins() {
 }
 async function openNotice(id, pan) {
   const n = NOTICES.find(x => x.id === id); if (!n) return;
-  noticeSel = id; S.sel = null; renderPins(); renderNoticePins();
+  noticeSel = id; S.sel = null; xsel = null; renderPins(); renderNoticePins(); renderExtraPins();
   if (pan && n.lat) { map.setLevel(5); map.panTo(new kakao.maps.LatLng(n.lat, n.lon)); }
   const el = $('#detail'); el.hidden = false; el.innerHTML = '<div class="note">요약 불러오는 중…</div>'; el.scrollIntoView({ block: 'nearest' });
   let d = NJSON.get(id);
@@ -278,8 +442,10 @@ async function openNotice(id, pan) {
   h += `<div class="sec">청약 일정</div><div class="note" style="white-space:pre-line">${esc(d.sched)}</div>`;
   h += '<div class="sec">확인 필요 사항</div><div class="note">' + d.todo.map(t => '· ' + esc(t)).join('<br>') + '</div>';
   h += `<div class="note">${esc(d.made)} · 입주자모집공고문에서 발췌·계산한 내용이며 [p.N]은 공고문 쪽수입니다. 참고용입니다.</div>`;
+  h += '<div id="sx"></div>';
   el.innerHTML = h;
   $('#dx').onclick = () => { noticeSel = null; el.hidden = true; renderNoticePins(); };
+  if (KEY) { const ex = await saleExtra(id); const sx = document.getElementById('sx'); if (sx && noticeSel === id) sx.innerHTML = ex; }
 }
 
 /* ---------- 주변 단지 ---------- */
@@ -302,7 +468,7 @@ async function refresh(fit) {
   } else status('아래에 국토부 인증키를 입력하면 시세가 표시돼요.');
   recompute();
   if (fit && circle) map.setBounds(circle.getBounds());
-  loadBld(tok);
+  loadBld(tok); loadExtras(tok);
 }
 function recompute() {
   S.sum = new Map(S.list.map(i => [i.id, summarize(i.id)]));
@@ -316,7 +482,7 @@ function recompute() {
 /* ---------- 지도 ---------- */
 function setCenter(lat, lon, label, o) {
   o = o || {};
-  S.center = { lat, lon, label }; S.sel = null; if (!noticeSel) $('#detail').hidden = true; $('#maphint').style.display = 'none';
+  S.center = { lat, lon, label }; S.sel = null; if (!noticeSel) $('#detail').hidden = true; xsel = null; X.sales = []; X.silv = []; renderExtraPins(); $('#maphint').style.display = 'none';
   const ll = new kakao.maps.LatLng(lat, lon);
   if (!centerMarker) centerMarker = new kakao.maps.Marker({ position: ll, map }); else { centerMarker.setPosition(ll); centerMarker.setMap(map); }
   if (!circle) circle = new kakao.maps.Circle({ center: ll, radius: S.rad, strokeWeight: 2, strokeColor: '#4655d6', strokeOpacity: .85,
@@ -355,10 +521,13 @@ function renderList() {
   h += S.list.slice(0, 300).map(it => { const c = C[it.id], s = S.sum.get(it.id), inf = infoLine(c);
     const px = s ? `<div class="px"><b>${eok(s.val)}</b><small>${s.py}평 · ${s.cnt}건</small></div>` : (S.hasData ? '<div class="px"><small>거래 없음</small></div>' : '');
     return `<div class="item${S.sel === it.id ? ' sel' : ''}" data-id="${it.id}"><div class="n"><div class="nm">${esc(c.name)}</div><div class="ad">${esc(c.umd)} ${esc(c.jibun)} · ${it.d < 1000 ? Math.round(it.d) + 'm' : (it.d / 1000).toFixed(2) + 'km'}</div>${inf ? `<div class="inf">${inf}</div>` : ''}</div>${px}</div>`; }).join('');
+  if (X.sales.length) h += `<div class="lh"><b>분양 (청약홈)</b> 최근 2년 공고 ${X.sales.length}건</div>` + X.sales.map(x => `<div class="item" data-sid="${esc(x.id)}"><div class="n"><div class="nm">${esc(x.name)}</div><div class="ad">공고 ${esc(x.r.RCRIT_PBLANC_DE || '')} · ${esc(x.r.TOT_SUPLY_HSHLDCO || '')}세대 · ${Math.round(x.d)}m</div></div><div class="px"><small>${x.trades ? '분양권 ' + x.trades.length + '건' : '경쟁률'}</small></div></div>`).join('');
+  if (X.silv.length) h += `<div class="lh"><b>분양권·입주권 거래 단지</b> ${X.silv.length}곳 (입주 전)</div>` + X.silv.map(g => { const b = silvBest(g.trades); return `<div class="item" data-vid="${esc(g.key)}"><div class="n"><div class="nm">${esc(g.name)}</div><div class="ad">${esc(g.addr)} · ${Math.round(g.d)}m</div></div><div class="px"><b>${eok(b.val)}</b><small>${b.py}평 · ${b.n}건</small></div></div>`; }).join('');
   el.innerHTML = h + nl;
 }
 function select(id, pan) {
   if (noticeSel) { noticeSel = null; renderNoticePins(); }
+  if (xsel) { xsel = null; renderExtraPins(); }
   S.sel = id; S.dtype = null; renderDetail(); renderPins(); renderList();
   if (pan) map.panTo(new kakao.maps.LatLng(C[id].lat, C[id].lon));
   const it = document.querySelector(`.item[data-id="${id}"]`); if (it) it.scrollIntoView({ block: 'nearest' });
@@ -399,6 +568,8 @@ function renderDetail() {
       arr.slice().sort((a, b) => b[0] - a[0]).slice(0, 15).map(t => `<tr><td>${ds(t[0])}</td><td>${t[1]}㎡ (${pyeong(t[1])}평)</td><td>${t[2]}</td><td><b>${eokFull(t[3])}</b></td></tr>`).join('') + '</table>' +
       '<div class="note">연한 막대는 신고 기한(계약 후 30일) 때문에 아직 집계 중일 수 있는 최근 두 달이에요. 평형은 전용면적 기준 추정치(공급면적 ≈ 전용 × 1.32)입니다.</div>';
   }
+  const sv = (SILVC.get(S.sel) || []).filter(t => t[0] >= cut);
+  if (sv.length) h += `<div class="sec">분양권·입주권 실거래 (${sv.length}건)</div>` + silvTable(sv);
   el.innerHTML = h;
   $('#dx').onclick = () => { S.sel = null; el.hidden = true; renderPins(); renderList(); };
   el.querySelectorAll('.chips button').forEach(b => b.onclick = () => { S.dtype = b.dataset.t === 'all' ? 'all' : +b.dataset.t; renderDetail(); });
@@ -441,7 +612,7 @@ function bind() {
     [...$('#sug').children].forEach((d, k) => d.classList.toggle('on', k === sugOn)); });
   $('#sug').addEventListener('mousedown', e => { const d = e.target.closest('[data-k]'); if (d) { e.preventDefault(); choose(+d.dataset.k); } });
   $('#q').addEventListener('blur', () => setTimeout(() => { $('#sug').style.display = 'none'; }, 150));
-  $('#list').addEventListener('click', e => { const d = e.target.closest('.item'); if (!d) return; if (d.dataset.nid) openNotice(d.dataset.nid, true); else select(+d.dataset.id, true); });
+  $('#list').addEventListener('click', e => { const d = e.target.closest('.item'); if (!d) return; if (d.dataset.nid) openNotice(d.dataset.nid, true); else if (d.dataset.sid) openSale(d.dataset.sid); else if (d.dataset.vid) openSilv(d.dataset.vid); else select(+d.dataset.id, true); });
 }
 function loadKakao() {
   return new Promise((res, rej) => {
