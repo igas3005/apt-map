@@ -113,15 +113,68 @@ const tradesOf = id => LIVE.get(id) || [];
 /* ---------- 건축물대장 표제부: 세대수·사용승인연도·층수 ---------- */
 // 단지 지번으로 조회하고, 결과는 바뀌지 않는 값이라 이 브라우저에 저장해 다시 조회하지 않는다.
 const BLD_API = 'https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo';
-let BLD = {}; try { BLD = JSON.parse(localStorage.getItem('bld_v2') || '{}') || {}; } catch (e) {}
+let BLD = {}; try { BLD = JSON.parse(localStorage.getItem('bld_v3') || '{}') || {}; } catch (e) {}
 const BY = new Map(); let bldSaveT = 0, bldErr = null;
 const bkey = c => c.code + '|' + c.umd + '|' + c.jibun;
-function bldSave() { clearTimeout(bldSaveT); bldSaveT = setTimeout(() => { try { localStorage.setItem('bld_v2', JSON.stringify(BLD)); } catch (e) {} }, 800); }
+function bldSave() { clearTimeout(bldSaveT); bldSaveT = setTimeout(() => { try { localStorage.setItem('bld_v3', JSON.stringify(BLD)); } catch (e) {} }, 800); }
 function regionCode(c) { return new Promise(res => geocoder.coord2RegionCode(c.lon, c.lat, (r, st) => {
   if (st !== kakao.maps.services.Status.OK) return res(null); const b = r.find(x => x.region_type === 'B'); res(b && b.code ? String(b.code) : null); })); }
+// --- K-apt(공동주택관리정보시스템): 단지 단위 세대수·동수·최고층·지하층. 있으면 이쪽을 우선한다. ---
+// 서비스 버전이 계정·시기에 따라 달라 후보를 차례로 시도하고, 성공한 주소를 기억한다.
+const KAPT_LIST = { urls: ['AptListService3/getLegaldongAptList3', 'AptListService4/getLegaldongAptList4', 'AptListService2/getLegaldongAptList'] };
+const KAPT_BASE = { urls: ['AptBasisInfoServiceV4/getAphusBassInfoV4', 'AptBasisInfoServiceV5/getAphusBassInfoV5', 'AptBasisInfoServiceV3/getAphusBassInfoV3'] };
+const KLIST = new Map(); let kaptErr = null;
+function parseAny(text) {            // JSON·XML 어느 쪽으로 와도 [{필드:값}] 로 바꾼다
+  const t = text.trim();
+  if (t[0] === '{') { const j = JSON.parse(t), r = j.response || j, h = r.header || {}, b = r.body || {};
+    if (h.resultCode && h.resultCode !== '00' && h.resultCode !== '000') throw { kind: 'api', msg: h.resultCode + ' ' + (h.resultMsg || '') };
+    let it = (b.items && b.items.item !== undefined) ? b.items.item : (b.items !== undefined ? b.items : b.item);
+    if (!it) it = []; if (!Array.isArray(it)) it = [it];
+    return { items: it.filter(x => x && typeof x === 'object'), total: +b.totalCount || it.length }; }
+  const doc = new DOMParser().parseFromString(t, 'text/xml');
+  const g = n => { const e = doc.getElementsByTagName(n)[0]; return e ? e.textContent.trim() : ''; };
+  if (doc.getElementsByTagName('parsererror').length) throw { kind: 'api', msg: t.slice(0, 80) };
+  if (doc.documentElement.nodeName.indexOf('OpenAPI') === 0 || g('returnAuthMsg')) throw { kind: 'key', msg: g('returnAuthMsg') || g('errMsg') };
+  const rc = g('resultCode'); if (rc && rc !== '00' && rc !== '000') throw { kind: 'api', msg: rc + ' ' + g('resultMsg') };
+  const items = [...doc.getElementsByTagName('item')].map(it => { const o = {}; for (const ch of it.children) o[ch.nodeName] = ch.textContent.trim(); return o; });
+  return { items, total: +g('totalCount') || items.length };
+}
+async function callAny(group, params) {
+  let key = KEY; try { key = decodeURIComponent(KEY); } catch (e) {}
+  const order = group.ok != null ? [group.ok] : group.urls.map((_, i) => i); let last;
+  for (const i of order) {
+    try {
+      let r; try { r = await fetch('https://apis.data.go.kr/1613000/' + group.urls[i] + '?' + new URLSearchParams(Object.assign({ ServiceKey: key }, params))); } catch (e) { throw { kind: 'net' }; }
+      if (r.status === 401 || r.status === 403) throw { kind: 'key', msg: 'HTTP ' + r.status };
+      if (!r.ok) throw { kind: 'api', msg: 'HTTP ' + r.status };
+      const out = parseAny(await r.text()); group.ok = i; return out;
+    } catch (e) { last = e; last.url = group.urls[i]; }
+  }
+  throw last;
+}
+function kaptList(bjd) {
+  if (!KLIST.has(bjd)) KLIST.set(bjd, (async () => { const all = [];
+    for (let page = 1; page <= 5; page++) { const r = await callAny(KAPT_LIST, { bjdCode: bjd, pageNo: page, numOfRows: 200 });
+      all.push(...r.items); if (page * 200 >= r.total || !r.items.length) break; }
+    return all.map(x => ({ code: x.kaptCode, n: nn(x.kaptName) })).filter(x => x.code); })());
+  return KLIST.get(bjd);
+}
+async function fetchKapt(c, rc) {
+  let list; try { list = await kaptList(rc); } catch (e) { KLIST.delete(rc); throw e; }
+  let cand = list.filter(x => x.n === c.nn);
+  if (!cand.length && c.nn) cand = list.filter(x => x.n && (x.n.includes(c.nn) || c.nn.includes(x.n)));
+  if (cand.length !== 1) return null;
+  const r = await callAny(KAPT_BASE, { kaptCode: cand[0].code }), o = r.items[0]; if (!o) return null;
+  const hh = parseInt(o.kaptdaCnt, 10) || 0; if (!hh) return null;
+  return [hh, +(String(o.kaptUsedate || '').slice(0, 4)) || 0, parseInt(o.kaptTopFloor, 10) || 0, parseInt(o.kaptBaseFloor, 10) || 0, parseInt(o.kaptDongCnt, 10) || 0, 'K'];
+}
 async function fetchBld(c) {
-  const m = c.jibun.match(/^(산)?(\d+)(?:-(\d+))?$/); if (!m) return 0;
   const rc = await regionCode(c); if (!rc || rc.length < 10) return 0;
+  if (!kaptErr) { try { const k = await fetchKapt(c, rc); if (k) return k; } catch (e) { kaptErr = e; } }
+  return fetchLedger(c, rc);
+}
+async function fetchLedger(c, rc) {
+  const m = c.jibun.match(/^(산)?(\d+)(?:-(\d+))?$/); if (!m) return 0;
   let key = KEY; try { key = decodeURIComponent(KEY); } catch (e) {}
   const rows = [];
   for (let page = 1; page <= 4; page++) {
@@ -154,6 +207,7 @@ async function loadBld(tok) {
   await Promise.all(Array.from({ length: 4 }, worker));
   if (tok !== S.token) return;
   renderList(); if (S.sel != null) renderDetail();
+  if (kaptErr && !bldErr && !S.liveErr) status('K-apt 단지정보 조회에 실패해 건축물대장 값으로 표시했어요 (' + (kaptErr.kind || '') + ' ' + (kaptErr.msg || '') + ' / ' + (kaptErr.url || '') + '). 이 문구를 그대로 알려 주세요.', true);
   if (bldErr && !S.liveErr) status(bldErr.kind === 'key'
     ? '세대수·층수(건축물대장) 조회가 거절됐어요 (' + (bldErr.msg || '') + '). 활용신청 승인이 아직 반영되지 않았을 수 있어요. 잠시 뒤 새로고침해 보세요.'
     : '세대수·층수(건축물대장) API에 접속하지 못했어요. 이 문구를 그대로 알려 주세요.', true);
@@ -161,9 +215,10 @@ async function loadBld(tok) {
 function infoLine(c) {
   const b = BLD[bkey(c)], parts = [], y = (b && b[1]) || BY.get(c.id);
   if (b && b[0]) parts.push(b[0].toLocaleString('ko-KR') + '세대' + (b[4] > 1 ? `(${b[4]}개동)` : ''));
+  const src = b ? (b[5] === 'K' ? '' : ' <span class="src" title="K-apt에 없어 건축물대장 기준으로 표시. 지하층·세대수가 일부만 잡힐 수 있어요.">대장</span>') : '';
   if (y) parts.push(y + '년');
   if (b && b[2]) parts.push((b[3] ? `지하${b[3]}/` : '') + `지상${b[2]}층`);
-  return parts.join(' · ');
+  return parts.length ? parts.join(' · ') + src : '';
 }
 function dominant(arr) {            // 거래가 가장 많은 전용면적 타입
   const g = new Map(); for (const t of arr) { const k = Math.round(t[1]); (g.get(k) || g.set(k, []).get(k)).push(t); }
@@ -352,7 +407,7 @@ function renderKey() {
   if (KEY) { el.innerHTML = '<span>국토부 인증키 저장됨 (이 브라우저에만)</span> <button id="kchg">변경</button>'; $('#kchg').onclick = () => { KEY = ''; S.hasData = false; renderKey(); }; return; }
   el.innerHTML = '<input id="kin" type="password" autocomplete="off" placeholder="국토부 실거래가 인증키 붙여넣기"><button id="ksave" class="pri">저장</button><small>키는 이 브라우저에만 저장되고 사이트나 저장소에는 올라가지 않아요.</small>';
   $('#ksave').onclick = () => { const v = $('#kin').value.trim(); if (!v) return; KEY = v; try { localStorage.setItem('molit_key', v); } catch (e) {}
-    S.hasData = true; apiIdx = 0; apiLocked = false; bldErr = null; renderKey(); if (S.center) refresh(false); else status('주소를 검색하면 시세가 표시돼요.'); };
+    S.hasData = true; apiIdx = 0; apiLocked = false; bldErr = null; kaptErr = null; renderKey(); if (S.center) refresh(false); else status('주소를 검색하면 시세가 표시돼요.'); };
 }
 async function init() {
   bind(); renderKey(); renderList();
