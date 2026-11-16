@@ -309,7 +309,7 @@ async function odGet(path, cond) {
   const j = await r.json(); return Array.isArray(j.data) ? j.data : [];
 }
 // 청약홈 분양정보: 시도 단위로 받아 둔다. 조건 검색이 거절되면 조건 없이 받아 화면에서 거른다.
-const ST = { sido: '서울', q: '', years: 2, rows: null, err: null, loading: false, init: false, diag: '' };
+const ST = { meta: '', log: '', sido: '서울', q: '', years: 2, rows: null, err: null, loading: false, init: false, diag: '' };
 const SALEROW = new Map(); let salePin = null;
 async function odPages(path, cond, maxPages) {
   let key = KEY; try { key = decodeURIComponent(KEY); } catch (e) {}
@@ -319,6 +319,7 @@ async function odPages(path, cond, maxPages) {
     let r; try { r = await fetch(OD + path + '?' + q); } catch (e) { throw { kind: 'net' }; }
     if (!r.ok) { let t = ''; try { t = (await r.text()).slice(0, 120); } catch (e) {} throw { kind: r.status === 401 || r.status === 403 ? 'key' : 'api', msg: 'HTTP ' + r.status + ' ' + t }; }
     const j = await r.json(), d = Array.isArray(j.data) ? j.data : [];
+    ST.meta = `page ${page}: currentCount=${j.currentCount} matchCount=${j.matchCount} totalCount=${j.totalCount}` + (Array.isArray(j.data) ? '' : ' / 응답 키: ' + Object.keys(j).join(','));
     all.push(...d); if (d.length < 500) break;
   }
   return all;
@@ -328,8 +329,16 @@ function salesOf(sido) {
   if (!SALES.has(k)) { const d = new Date(S.asOf.getFullYear() - ST.years, S.asOf.getMonth(), S.asOf.getDate());
     const from = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     const path = 'ApplyhomeInfoDetailSvc/v1/getAPTLttotPblancDetail';
-    SALES.set(k, odPages(path, { 'SUBSCRPT_AREA_CODE_NM::EQ': sido, 'RCRIT_PBLANC_DE::GTE': from }, 6)
-      .catch(e => { if (e.kind !== 'api') throw e; return odPages(path, {}, 12).then(rows => rows.filter(r => String(r.SUBSCRPT_AREA_CODE_NM || '').includes(sido) && String(r.RCRIT_PBLANC_DE || '') >= from)); })
+    const local = rows => rows.filter(r => String(r.SUBSCRPT_AREA_CODE_NM || r.HSSPLY_ADRES || '').includes(sido) && String(r.RCRIT_PBLANC_DE || '') >= from);
+    // 조건 검색이 거절되거나 0건이면 조건을 줄여 다시 받고 화면에서 거른다
+    SALES.set(k, (async () => {
+      const tries = [[{ 'SUBSCRPT_AREA_CODE_NM::EQ': sido, 'RCRIT_PBLANC_DE::GTE': from }, 6], [{ 'RCRIT_PBLANC_DE::GTE': from }, 12], [{}, 20]]; let last = null, log = [];
+      for (const [cond, pages] of tries) {
+        try { const rows = local(await odPages(path, cond, pages)); log.push(Object.keys(cond).length + '개 조건 → ' + rows.length + '건 (' + ST.meta + ')'); if (rows.length) { ST.log = log.join(' / '); return rows; } }
+        catch (e) { if (e.kind !== 'api') throw e; last = e; log.push(Object.keys(cond).length + '개 조건 → 오류 ' + (e.msg || '')); }
+      }
+      ST.log = log.join(' / '); if (last && log.every(x => x.includes('오류'))) throw last; return [];
+    })()
       .catch(e => { SALES.delete(k); throw e; })); }
   return SALES.get(k);
 }
@@ -369,6 +378,7 @@ function renderSaleList() {
     h += `${ST.sido} 최근 ${ST.years}년 ${ST.rows.length}건${toks.length ? ' 중 ' + rows.length + '건' : ''}</div>`;
     if (ST.diag) h += `<div class="status err" style="margin:10px 14px">${esc(ST.diag)} 이 문구를 그대로 알려 주세요.</div>`;
     if (!rows.length) h += '<div class="empty">조건에 맞는 공고가 없어요.</div>';
+    if (!ST.rows.length && ST.log) h += `<div class="status err" style="margin:10px 14px">청약홈 조회 결과가 0건이에요. 진단: ${esc(ST.log)} — 이 문구를 그대로 알려 주세요.</div>`;
     h += rows.slice(0, 200).map(r => { const id = String(r.HOUSE_MANAGE_NO), an = NOTICES.some(n => n.id === id);
       return `<div class="item${xsel === 's' + id ? ' sel' : ''}" data-sid="${esc(id)}"><div class="n"><div class="nm">${esc(r.HOUSE_NM || '(이름 없음)')}</div><div class="ad">${esc(r.HSSPLY_ADRES || '')}</div><div class="inf">공고 ${esc(r.RCRIT_PBLANC_DE || '-')} · ${esc(r.TOT_SUPLY_HSHLDCO == null ? '-' : r.TOT_SUPLY_HSHLDCO)}세대${r.MVN_PREARNGE_YM ? ' · 입주 ' + esc(r.MVN_PREARNGE_YM) : ''}</div></div><div class="px"><small>${an ? '분석 요약 있음' : '경쟁률'}</small></div></div>`; }).join('');
     if (rows.length > 200) h += '<div class="lh">최근 200건만 표시했어요. 시군구나 단지명으로 좁혀 보세요.</div>';
