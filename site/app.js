@@ -236,6 +236,52 @@ function summarize(id) {
   return { n: arr.length, type: best.k, py: pyeong(best.k), cnt: best.v.length, latest, med: m, val: S.metric === 'latest' ? latest[3] : m };
 }
 
+/* ---------- 분양 분석 (모집공고 요약) ---------- */
+// data/notices/index.json 에 올라온 단지를 지도에 표시하고, 누르면 요약과 PPT 내려받기를 보여 준다.
+let NOTICES = [], NOV = [], noticeSel = null; const NJSON = new Map();
+async function loadNotices() {
+  try { NOTICES = await getJSON('data/notices/index.json'); } catch (e) { NOTICES = []; }
+  await Promise.all(NOTICES.map(n => new Promise(res => {
+    if (n.lat && n.lon) return res();
+    geocoder.addressSearch(n.addr, (r, st) => { if (st === kakao.maps.services.Status.OK && r[0]) { n.lat = +r[0].y; n.lon = +r[0].x; } res(); }); })));
+  renderNoticePins(); renderList();
+}
+function renderNoticePins() {
+  NOV.forEach(o => o.setMap(null)); NOV = [];
+  for (const n of NOTICES) { if (!n.lat) continue;
+    const el = document.createElement('div'); el.className = 'pin npin' + (noticeSel === n.id ? ' sel' : '');
+    el.innerHTML = `<small>분양 분석</small><b>${esc(n.name)}</b>`; el.title = n.name + ' 모집공고 요약';
+    el.addEventListener('click', e => { e.stopPropagation(); openNotice(n.id, false); });
+    const ov = new kakao.maps.CustomOverlay({ position: new kakao.maps.LatLng(n.lat, n.lon), content: el, xAnchor: .12, yAnchor: 1, zIndex: 30, clickable: true });
+    ov.setMap(map); NOV.push(ov); }
+}
+async function openNotice(id, pan) {
+  const n = NOTICES.find(x => x.id === id); if (!n) return;
+  noticeSel = id; S.sel = null; renderPins(); renderNoticePins();
+  if (pan && n.lat) { map.setLevel(5); map.panTo(new kakao.maps.LatLng(n.lat, n.lon)); }
+  const el = $('#detail'); el.hidden = false; el.innerHTML = '<div class="note">요약 불러오는 중…</div>'; el.scrollIntoView({ block: 'nearest' });
+  let d = NJSON.get(id);
+  if (!d) { try { d = await getJSON(n.json); NJSON.set(id, d); } catch (e) { el.innerHTML = '<div class="note">요약을 불러오지 못했어요.</div>'; return; } }
+  if (noticeSel !== id) return;
+  const num = v => Number(v).toLocaleString('ko-KR'), kv = rows => '<table class="kvt">' + rows.map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join('') + '</table>';
+  let h = `<button class="x" id="dx">닫기</button><h2>${esc(d.name)}</h2><div class="ad">${esc(d.addr)} · 모집공고 ${esc(d.noticeDate)} · ${num(d.units)}세대 · 입주 ${esc(d.moveIn)}</div>`;
+  h += `<a class="dl" href="${esc(d.file)}" download="${esc(d.name)} 모집공고 분석.pptx">분석 PPT 내려받기</a>`;
+  h += `<div class="kv"><div><small>평균 평당가(확장 전)</small><b>${num(d.all.avgPy)}천원</b></div><div><small>확장 포함</small><b>${num(d.all.avgExtPy)}천원</b></div><div><small>평균 분양가</small><b>${eokFull(d.all.avg / 10)}</b></div></div>`;
+  h += '<div class="sec">타입별 분양가 (천원, 세대수 가중평균)</div><table><tr><th>타입</th><th>세대</th><th>평균 분양가</th><th>평당가</th><th>확장비</th><th>확장 포함 평당</th></tr>' +
+    d.price.map(p => `<tr><td>${esc(p.type)}<br><small style="color:var(--mute)">${p.py}평</small></td><td>${num(p.units)}</td><td>${num(p.avg)}</td><td>${num(p.avgPy)}</td><td>${num(p.ext)}</td><td><b>${num(p.avgExtPy)}</b></td></tr>`).join('') + '</table>';
+  h += '<details><summary>층별 분양가 보기</summary><table><tr><th>타입·층</th><th>세대</th><th>분양가</th><th>평당가</th><th>확장 포함</th></tr>' +
+    d.price.map(p => p.floors.map(f => `<tr><td>${esc(p.type)} ${esc(f.f)}</td><td>${num(f.n)}</td><td>${num(f.amt)}</td><td>${num(f.py)}</td><td>${num(f.amtExt)}</td></tr>`).join('')).join('') + '</table></details>';
+  h += '<div class="sec">납부 조건</div>' + kv(d.pay.map(r => [r[0] + ' ' + r[1], r[2]]));
+  h += '<div class="sec">공급 세대</div><table><tr><th>타입</th><th>전용㎡</th><th>총</th><th>특별</th><th>일반</th></tr>' + d.supply.map(x => `<tr><td>${esc(x.type)}</td><td>${x.ex.toFixed(2)}</td><td>${num(x.total)}</td><td>${num(x.special)}</td><td>${num(x.general)}</td></tr>`).join('') + '</table>';
+  h += '<div class="sec">유상 옵션 (천원)</div>' + kv(d.options.map(r => [r[0] + ' · ' + r[1], r[2]]));
+  h += '<div class="sec">사업개요</div>' + kv(d.overview) + '<div class="sec">청약·규제 조건</div>' + kv(d.rules);
+  h += `<div class="sec">청약 일정</div><div class="note" style="white-space:pre-line">${esc(d.sched)}</div>`;
+  h += '<div class="sec">확인 필요 사항</div><div class="note">' + d.todo.map(t => '· ' + esc(t)).join('<br>') + '</div>';
+  h += `<div class="note">${esc(d.made)} · 입주자모집공고문에서 발췌·계산한 내용이며 [p.N]은 공고문 쪽수입니다. 참고용입니다.</div>`;
+  el.innerHTML = h;
+  $('#dx').onclick = () => { noticeSel = null; el.hidden = true; renderNoticePins(); };
+}
+
 /* ---------- 주변 단지 ---------- */
 function nearby(lat, lon, rad) {
   const dl = rad / 111320 * 1.05, dn = dl / Math.cos(lat * Math.PI / 180), out = [];
@@ -270,7 +316,7 @@ function recompute() {
 /* ---------- 지도 ---------- */
 function setCenter(lat, lon, label, o) {
   o = o || {};
-  S.center = { lat, lon, label }; S.sel = null; $('#detail').hidden = true; $('#maphint').style.display = 'none';
+  S.center = { lat, lon, label }; S.sel = null; if (!noticeSel) $('#detail').hidden = true; $('#maphint').style.display = 'none';
   const ll = new kakao.maps.LatLng(lat, lon);
   if (!centerMarker) centerMarker = new kakao.maps.Marker({ position: ll, map }); else { centerMarker.setPosition(ll); centerMarker.setMap(map); }
   if (!circle) circle = new kakao.maps.Circle({ center: ll, radius: S.rad, strokeWeight: 2, strokeColor: '#4655d6', strokeOpacity: .85,
@@ -301,16 +347,18 @@ function renderPins() {
 /* ---------- 목록 / 상세 ---------- */
 function renderList() {
   const el = $('#list');
-  if (!S.center) { el.innerHTML = '<div class="empty">주소를 검색하거나 지도를 클릭하면<br>반경 안의 단지와 시세가 여기에 나와요.</div>'; return; }
+  const nl = NOTICES.length ? '<div class="lh"><b>분양 분석</b> 모집공고 요약 ' + NOTICES.length + '건</div>' + NOTICES.map(n => `<div class="item nitem" data-nid="${esc(n.id)}"><div class="n"><div class="nm">${esc(n.name)}</div><div class="ad">${esc(n.addr)} · 공고 ${esc(n.noticeDate)}</div></div><div class="px"><small>요약·PPT</small></div></div>`).join('') : '';
+  if (!S.center) { el.innerHTML = '<div class="empty">주소를 검색하거나 지도를 클릭하면<br>반경 안의 단지와 시세가 여기에 나와요.</div>' + nl; return; }
   const n = S.list.length;
   let h = `<div class="lh"><b>${esc(S.center.label || '선택한 위치')}</b> 반경 ${S.rad >= 1000 ? S.rad / 1000 + 'km' : S.rad + 'm'} · 단지 ${n.toLocaleString('ko-KR')}개${n > 300 ? ' (가까운 300개 표시)' : ''}</div>`;
   if (!n) h += '<div class="empty">이 반경에 등록된 단지가 없어요.<br>반경을 넓혀 보세요.</div>';
   h += S.list.slice(0, 300).map(it => { const c = C[it.id], s = S.sum.get(it.id), inf = infoLine(c);
     const px = s ? `<div class="px"><b>${eok(s.val)}</b><small>${s.py}평 · ${s.cnt}건</small></div>` : (S.hasData ? '<div class="px"><small>거래 없음</small></div>' : '');
     return `<div class="item${S.sel === it.id ? ' sel' : ''}" data-id="${it.id}"><div class="n"><div class="nm">${esc(c.name)}</div><div class="ad">${esc(c.umd)} ${esc(c.jibun)} · ${it.d < 1000 ? Math.round(it.d) + 'm' : (it.d / 1000).toFixed(2) + 'km'}</div>${inf ? `<div class="inf">${inf}</div>` : ''}</div>${px}</div>`; }).join('');
-  el.innerHTML = h;
+  el.innerHTML = h + nl;
 }
 function select(id, pan) {
+  if (noticeSel) { noticeSel = null; renderNoticePins(); }
   S.sel = id; S.dtype = null; renderDetail(); renderPins(); renderList();
   if (pan) map.panTo(new kakao.maps.LatLng(C[id].lat, C[id].lon));
   const it = document.querySelector(`.item[data-id="${id}"]`); if (it) it.scrollIntoView({ block: 'nearest' });
@@ -393,7 +441,7 @@ function bind() {
     [...$('#sug').children].forEach((d, k) => d.classList.toggle('on', k === sugOn)); });
   $('#sug').addEventListener('mousedown', e => { const d = e.target.closest('[data-k]'); if (d) { e.preventDefault(); choose(+d.dataset.k); } });
   $('#q').addEventListener('blur', () => setTimeout(() => { $('#sug').style.display = 'none'; }, 150));
-  $('#list').addEventListener('click', e => { const d = e.target.closest('.item'); if (d) select(+d.dataset.id, true); });
+  $('#list').addEventListener('click', e => { const d = e.target.closest('.item'); if (!d) return; if (d.dataset.nid) openNotice(d.dataset.nid, true); else select(+d.dataset.id, true); });
 }
 function loadKakao() {
   return new Promise((res, rej) => {
@@ -419,6 +467,7 @@ async function init() {
   map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
   geocoder = new kakao.maps.services.Geocoder(); places = new kakao.maps.services.Places();
   kakao.maps.event.addListener(map, 'zoom_changed', () => renderPins());
+  loadNotices();
   kakao.maps.event.addListener(map, 'click', ev => { const ll = ev.latLng, lat = ll.getLat(), lon = ll.getLng();
     setCenter(lat, lon, '지도에서 선택한 위치', { keepView: true });
     geocoder.coord2Address(lon, lat, (r, st) => { if (st === kakao.maps.services.Status.OK && r[0]) {
