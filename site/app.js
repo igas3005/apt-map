@@ -1,6 +1,16 @@
 (function () {
 'use strict';
 const $ = s => document.querySelector(s);
+// 공공데이터포털은 짧은 시간에 요청이 몰리면 HTTP 429로 거절한다. 동시에 3건, 최소 간격을 두고 보내며 429면 기다렸다 다시 보낸다.
+const _fetch = window.fetch.bind(window), _q = []; let _active = 0, _last = 0;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function _pump() { while (_active < 3 && _q.length) { const now = Date.now(), wait = Math.max(0, _last + 150 - now); _last = now + wait; _active++; setTimeout(_q.shift(), wait); } }
+function fetch(u, opt) {
+  if (!/data\.go\.kr|odcloud\.kr/.test(String(u))) return _fetch(u, opt);
+  return new Promise((res, rej) => { _q.push(async () => {
+    try { let r; for (let a = 0; a < 5; a++) { r = await _fetch(u, opt); if (r.status !== 429) break; if (a < 4) await sleep(900 * (a + 1) * (a + 1)); } res(r); }
+    catch (e) { rej(e); } finally { _active--; _pump(); } }); _pump(); });
+}
 const cfg = window.APP_CONFIG || {};
 const PY = 3.3058;                 // ㎡ -> 평
 const SUPPLY = 1.32;               // 전용 -> 공급 면적 대략 비율 (평형 표시용 추정치)
@@ -50,16 +60,17 @@ async function loadComplexes() {
   C = d.R.map((r, i) => { const p = d.L[r[0]].split('|');
     return { id: i, sido: p[0], gu: p[1], umd: p[2], code: p[3], name: r[1], jibun: r[2], lat: r[3], lon: r[4] }; });
   for (const c of C) { const last = c.umd.split(' ').pop(); c.nn = nn(c.name);
-    for (const f of [c.code].concat(LEGACY[c.code] || [])) { push(IDX1, f + '|' + last + '|' + c.jibun, c.id); push(IDX2, f + '|' + last + '|' + c.nn, c.id); } }
+    const names = [...new Set([last, c.umd, c.umd.split(' ')[0]])];
+    for (const f of [c.code].concat(LEGACY[c.code] || [])) for (const u of names) { push(IDX1, f + '|' + u + '|' + c.jibun, c.id); push(IDX2, f + '|' + u + '|' + c.nn, c.id); } }
   S.asOf = new Date(); S.hasData = !!KEY;
 }
 function matchRow(f, umd, jibun, name) {
-  const n = nn(name); let cand = IDX1.get(f + '|' + umd + '|' + jibun);
+  const n = nn(name), u2 = String(umd).split(' ').pop(); let cand = IDX1.get(f + '|' + umd + '|' + jibun) || IDX1.get(f + '|' + u2 + '|' + jibun);
   if (cand) { if (cand.length === 1) return cand[0];
     const ex = cand.filter(i => C[i].nn === n); if (ex.length) return ex[0];
     const pt = n ? cand.filter(i => C[i].nn && (C[i].nn.includes(n) || n.includes(C[i].nn))) : [];
     return pt.length === 1 ? pt[0] : null; }
-  cand = IDX2.get(f + '|' + umd + '|' + n); return cand && cand.length === 1 ? cand[0] : null;
+  cand = IDX2.get(f + '|' + umd + '|' + n) || IDX2.get(f + '|' + u2 + '|' + n); return cand && cand.length === 1 ? cand[0] : null;
 }
 function monthList(n) { const out = []; for (let k = 0; k <= n; k++) { const d = new Date(S.asOf.getFullYear(), S.asOf.getMonth() - k, 1); out.push(String(d.getFullYear() * 100 + d.getMonth() + 1)); } return out; }
 async function fetchPage(idx, f, ym, page) {
@@ -101,11 +112,12 @@ async function ensureTrades(codes) {
   let k = 0, done = 0; const tot = jobs.length;
   const worker = async () => { while (k < jobs.length && !S.liveErr) { const j = jobs[k++];
     try { await fetchMonth(j[0], j[1]); } catch (e) { S.liveErr = e; } done++; if (!S.liveErr) status(`실거래 조회 중… ${done}/${tot}`); } };
-  await Promise.all(Array.from({ length: 6 }, worker));
+  await Promise.all(Array.from({ length: 3 }, worker));
 }
 function liveErrText(e) {
   if (e.kind === 'net') return '브라우저에서 국토부 API에 접속하지 못했어요. 브라우저 보안 정책(CORS)이나 사내 네트워크 차단일 수 있어요. 이 문구를 그대로 알려 주세요.';
   if (e.kind === 'key') return '인증키 오류예요 (' + (e.msg || '') + '). 키가 맞는지, 공공데이터포털에서 아파트 매매 실거래가 활용신청이 승인됐는지 확인하세요.';
+  if (/429/.test(e.msg || '')) return '국토부 API가 요청이 너무 많다며 거절했어요 (HTTP 429). 잠시 뒤 다시 검색해 보세요. 계속되면 오늘 호출 한도를 넘은 것일 수 있어요.';
   return '실거래 조회 오류: ' + (e.msg || '알 수 없음');
 }
 const tradesOf = id => LIVE.get(id) || [];
@@ -207,7 +219,6 @@ async function loadBld(tok) {
   await Promise.all(Array.from({ length: 4 }, worker));
   if (tok !== S.token) return;
   renderList(); if (S.sel != null) renderDetail();
-  if (kaptErr && !bldErr && !S.liveErr) status('K-apt 단지정보 조회에 실패해 건축물대장 값으로 표시했어요 (' + (kaptErr.kind || '') + ' ' + (kaptErr.msg || '') + ' / ' + (kaptErr.url || '') + '). 이 문구를 그대로 알려 주세요.', true);
   if (bldErr && !S.liveErr) status(bldErr.kind === 'key'
     ? '세대수·층수(건축물대장) 조회가 거절됐어요 (' + (bldErr.msg || '') + '). 활용신청 승인이 아직 반영되지 않았을 수 있어요. 잠시 뒤 새로고침해 보세요.'
     : '세대수·층수(건축물대장) API에 접속하지 못했어요. 이 문구를 그대로 알려 주세요.', true);
@@ -287,7 +298,7 @@ async function ensureSilv(codes) {
   for (const c of codes) for (const f of [c].concat(LEGACY[c] || [])) for (const ym of monthList(S.months)) { const k = f + '|' + ym; if (!SDONE.has(k) && !seen.has(k)) { seen.add(k); jobs.push([f, ym]); } }
   let k = 0, err = null;
   const worker = async () => { while (k < jobs.length && !err) { const j = jobs[k++]; try { await silvMonth(j[0], j[1]); } catch (e) { err = e; } } };
-  await Promise.all(Array.from({ length: 6 }, worker));
+  await Promise.all(Array.from({ length: 3 }, worker));
   if (err) X.err.push('분양권 실거래: ' + (err.kind === 'net' ? '접속 실패' : (err.kind + ' ' + (err.msg || ''))));
 }
 async function odGet(path, cond) {
