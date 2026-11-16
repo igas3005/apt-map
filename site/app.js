@@ -325,8 +325,8 @@ async function odPages(path, cond, maxPages) {
   return all;
 }
 function salesOf(sido) {
-  const k = sido + '|' + ST.years;
-  if (!SALES.has(k)) { const d = new Date(S.asOf.getFullYear() - ST.years, S.asOf.getMonth(), S.asOf.getDate());
+  const k = sido;
+  if (!SALES.has(k)) { const d = new Date(S.asOf.getFullYear() - 3, S.asOf.getMonth(), S.asOf.getDate());
     const from = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     const path = 'ApplyhomeInfoDetailSvc/v1/getAPTLttotPblancDetail';
     const local = rows => rows.filter(r => String(r.SUBSCRPT_AREA_CODE_NM || r.HSSPLY_ADRES || '').includes(sido) && String(r.RCRIT_PBLANC_DE || '') >= from);
@@ -359,7 +359,7 @@ function renderSaleTab() {
     <label>기간<select id="syears">${[1, 2, 3].map(y => `<option value="${y}"${y === ST.years ? ' selected' : ''}>최근 ${y}년</option>`).join('')}</select></label>
     <label>시군구·단지명<input id="sq" type="search" placeholder="예: 용인, 처인구" value="${esc(ST.q)}" style="padding:6px 8px;font-size:13px"></label></div></div><div id="slist"></div>`;
   $('#ssido').onchange = () => { ST.sido = $('#ssido').value; loadSaleTab(); };
-  $('#syears').onchange = () => { ST.years = +$('#syears').value; loadSaleTab(); };
+  $('#syears').onchange = () => { ST.years = +$('#syears').value; renderSaleList(); };
   $('#sq').oninput = () => { ST.q = $('#sq').value.trim(); renderSaleList(); };
   renderSaleList();
 }
@@ -374,8 +374,10 @@ function renderSaleList() {
   else if (!ST.rows) h += '</div>';
   else {
     const toks = ST.q.split(/\s+/).filter(Boolean);
-    const rows = ST.rows.filter(r => { const t = String(r.HOUSE_NM || '') + ' ' + String(r.HSSPLY_ADRES || ''); return toks.every(x => t.includes(x)); });
-    h += `${ST.sido} 최근 ${ST.years}년 ${ST.rows.length}건${toks.length ? ' 중 ' + rows.length + '건' : ''}</div>`;
+    const yd = new Date(S.asOf.getFullYear() - ST.years, S.asOf.getMonth(), S.asOf.getDate()), yfrom = yd.getFullYear() + '-' + String(yd.getMonth() + 1).padStart(2, '0') + '-' + String(yd.getDate()).padStart(2, '0');
+    const inYears = ST.rows.filter(r => String(r.RCRIT_PBLANC_DE || '') >= yfrom);
+    const rows = inYears.filter(r => { const t = String(r.HOUSE_NM || '') + ' ' + String(r.HSSPLY_ADRES || ''); return toks.every(x => t.includes(x)); });
+    h += `${ST.sido} 최근 ${ST.years}년 ${inYears.length}건${toks.length ? ' 중 ' + rows.length + '건' : ''} <small>(받은 자료: 최근 3년 ${ST.rows.length}건)</small></div>`;
     if (ST.diag) h += `<div class="status err" style="margin:10px 14px">${esc(ST.diag)} 이 문구를 그대로 알려 주세요.</div>`;
     if (!rows.length) h += '<div class="empty">조건에 맞는 공고가 없어요.</div>';
     if (!ST.rows.length && ST.log) h += `<div class="status err" style="margin:10px 14px">청약홈 조회 결과가 0건이에요. 진단: ${esc(ST.log)} — 이 문구를 그대로 알려 주세요.</div>`;
