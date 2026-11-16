@@ -32,19 +32,82 @@ async function getJSON(u) { const r = await fetch(u, { cache: 'no-cache' }); if 
 function status(msg, err) { const el = $('#status'); el.textContent = msg || ''; el.className = 'status' + (err ? ' err' : ''); }
 
 /* ---------- 데이터 ---------- */
+// 실거래는 사이트를 연 브라우저가 국토교통부 API를 직접 조회한다. 인증키는 이 브라우저(localStorage)에만 저장한다.
+const API_LIST = [
+  'https://apis.data.go.kr/1613000/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev',
+  'https://apis.data.go.kr/1613000/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade',
+];
+let apiIdx = 0, apiLocked = false;
+// 2026년 개편으로 신설된 구는 개편 전 거래가 예전 시군구 코드에 남아 있을 수 있어 함께 조회한다.
+const LEGACY = { '41591': ['41590'], '41593': ['41590'], '41595': ['41590'], '41597': ['41590'],
+  '28125': ['28110', '28140'], '28155': ['28110'], '28275': ['28260'], '28290': ['28260'] };
+const LIVE = new Map(), DONE = new Set(), IDX1 = new Map(), IDX2 = new Map();
+let KEY = ''; try { KEY = localStorage.getItem('molit_key') || ''; } catch (e) {}
+const nn = s => String(s || '').replace(/\(.*?\)/g, '').replace(/[\s·\-_.,/]/g, '').toLowerCase().replace(/아파트/g, '');
+const push = (m, k, v) => { const a = m.get(k); if (a) a.push(v); else m.set(k, [v]); };
 async function loadComplexes() {
   const d = await getJSON('data/complexes.json');
   C = d.R.map((r, i) => { const p = d.L[r[0]].split('|');
     return { id: i, sido: p[0], gu: p[1], umd: p[2], code: p[3], name: r[1], jibun: r[2], lat: r[3], lon: r[4] }; });
-  try { const m = await getJSON('data/meta.json'); S.asOf = new Date(m.asOf + 'T00:00:00'); S.hasData = true; S.meta = m;
-    $('#foot').textContent = `시세 기준일 ${m.asOf} · 국토교통부 아파트 매매 실거래가(최근 ${m.months}개월), 해제 거래 제외 · 참고용`;
-  } catch (e) { S.hasData = false; }
+  for (const c of C) { const last = c.umd.split(' ').pop(); c.nn = nn(c.name);
+    for (const f of [c.code].concat(LEGACY[c.code] || [])) { push(IDX1, f + '|' + last + '|' + c.jibun, c.id); push(IDX2, f + '|' + last + '|' + c.nn, c.id); } }
+  S.asOf = new Date(); S.hasData = !!KEY;
+}
+function matchRow(f, umd, jibun, name) {
+  const n = nn(name); let cand = IDX1.get(f + '|' + umd + '|' + jibun);
+  if (cand) { if (cand.length === 1) return cand[0];
+    const ex = cand.filter(i => C[i].nn === n); if (ex.length) return ex[0];
+    const pt = n ? cand.filter(i => C[i].nn && (C[i].nn.includes(n) || n.includes(C[i].nn))) : [];
+    return pt.length === 1 ? pt[0] : null; }
+  cand = IDX2.get(f + '|' + umd + '|' + n); return cand && cand.length === 1 ? cand[0] : null;
+}
+function monthList(n) { const out = []; for (let k = 0; k <= n; k++) { const d = new Date(S.asOf.getFullYear(), S.asOf.getMonth() - k, 1); out.push(String(d.getFullYear() * 100 + d.getMonth() + 1)); } return out; }
+async function fetchPage(idx, f, ym, page) {
+  let key = KEY; try { key = decodeURIComponent(KEY); } catch (e) {}
+  const u = API_LIST[idx] + '?' + new URLSearchParams({ serviceKey: key, LAWD_CD: f, DEAL_YMD: ym, pageNo: page, numOfRows: 1000 });
+  let r; try { r = await fetch(u); } catch (e) { throw { kind: 'net' }; }
+  if (r.status === 401 || r.status === 403) throw { kind: 'key', msg: 'HTTP ' + r.status };
+  if (!r.ok) throw { kind: 'api', msg: 'HTTP ' + r.status };
+  const doc = new DOMParser().parseFromString(await r.text(), 'text/xml');
+  const g = t => { const e = doc.getElementsByTagName(t)[0]; return e ? e.textContent.trim() : ''; };
+  if (doc.documentElement.nodeName.indexOf('OpenAPI') === 0 || g('returnAuthMsg')) throw { kind: 'key', msg: g('returnAuthMsg') || g('errMsg') };
+  const rc = g('resultCode'); if (rc && rc !== '00' && rc !== '000') throw { kind: 'api', msg: rc + ' ' + g('resultMsg') };
+  return { total: +g('totalCount') || 0, items: [...doc.getElementsByTagName('item')] };
+}
+async function fetchMonth(f, ym) {
+  let page = 1; const got = [];
+  for (;;) {
+    const used = apiIdx; let res;
+    try { res = await fetchPage(used, f, ym, page); }
+    catch (e) { if (e.kind === 'key' && !apiLocked) { if (used === apiIdx && apiIdx + 1 < API_LIST.length) { apiIdx++; continue; } if (used !== apiIdx) continue; } throw e; }
+    apiLocked = true;
+    for (const it of res.items) { const v = t => { const e = it.getElementsByTagName(t)[0]; return e ? e.textContent.trim() : ''; };
+      if (v('cdealType').toUpperCase() === 'O' || v('cdealDay')) continue;
+      const amt = parseInt(v('dealAmount').replace(/,/g, ''), 10), area = Math.round(parseFloat(v('excluUseAr')) * 100) / 100;
+      const ymd = (+v('dealYear')) * 10000 + (+v('dealMonth')) * 100 + (+v('dealDay'));
+      if (!amt || !area || !ymd) continue;
+      const id = matchRow(f, v('umdNm'), v('jibun'), v('aptNm')); if (id == null) continue;
+      got.push([id, [ymd, area, parseInt(v('floor'), 10) || 0, amt]]); }
+    if (page * 1000 >= res.total || !res.items.length) break; page++;
+  }
+  for (const [id, t] of got) push(LIVE, id, t);
+  DONE.add(f + '|' + ym);
 }
 async function ensureTrades(codes) {
-  await Promise.all([...codes].filter(c => !TR.has(c)).map(async c => {
-    try { TR.set(c, await getJSON(`data/trades/${c}.json`)); } catch (e) { TR.set(c, null); } }));
+  S.liveErr = null; if (!KEY) return;
+  const seen = new Set(), jobs = [], ms = monthList(S.months);
+  for (const c of codes) for (const f of [c].concat(LEGACY[c] || [])) for (const ym of ms) { const k = f + '|' + ym; if (!DONE.has(k) && !seen.has(k)) { seen.add(k); jobs.push([f, ym]); } }
+  let k = 0, done = 0; const tot = jobs.length;
+  const worker = async () => { while (k < jobs.length && !S.liveErr) { const j = jobs[k++];
+    try { await fetchMonth(j[0], j[1]); } catch (e) { S.liveErr = e; } done++; if (!S.liveErr) status(`실거래 조회 중… ${done}/${tot}`); } };
+  await Promise.all(Array.from({ length: 6 }, worker));
 }
-const tradesOf = id => { const d = TR.get(C[id].code); return (d && d.c[id]) || []; };
+function liveErrText(e) {
+  if (e.kind === 'net') return '브라우저에서 국토부 API에 접속하지 못했어요. 브라우저 보안 정책(CORS)이나 사내 네트워크 차단일 수 있어요. 이 문구를 그대로 알려 주세요.';
+  if (e.kind === 'key') return '인증키 오류예요 (' + (e.msg || '') + '). 키가 맞는지, 공공데이터포털에서 아파트 매매 실거래가 활용신청이 승인됐는지 확인하세요.';
+  return '실거래 조회 오류: ' + (e.msg || '알 수 없음');
+}
+const tradesOf = id => LIVE.get(id) || [];
 function dominant(arr) {            // 거래가 가장 많은 전용면적 타입
   const g = new Map(); for (const t of arr) { const k = Math.round(t[1]); (g.get(k) || g.set(k, []).get(k)).push(t); }
   let best = null;
@@ -74,11 +137,11 @@ async function refresh(fit) {
   S.list = nearby(S.center.lat, S.center.lon, S.rad);
   renderList();
   if (S.hasData) {
-    status('시세 불러오는 중…');
+    status('실거래 조회 중…');
     await ensureTrades(new Set(S.list.map(i => C[i.id].code)));
     if (tok !== S.token) return;
-    status('');
-  } else status('시세 데이터가 아직 없어요. 저장소의 Actions에서 수집을 한 번 실행해 주세요.', true);
+    if (S.liveErr) status(liveErrText(S.liveErr), true); else status('');
+  } else status('아래에 국토부 인증키를 입력하면 시세가 표시돼요.');
   recompute();
   if (fit && circle) map.setBounds(circle.getBounds());
 }
@@ -163,7 +226,7 @@ function renderDetail() {
   if (S.dtype == null) S.dtype = dom ? dom.k : 'all';
   const arr = S.dtype === 'all' ? all : all.filter(t => Math.round(t[1]) === S.dtype);
   let h = `<button class="x" id="dx">닫기</button><h2>${esc(c.name)}</h2><div class="ad">${esc(c.sido)} ${esc(c.gu)} ${esc(c.umd)} ${esc(c.jibun)}</div>`;
-  if (!S.hasData) h += '<div class="note">시세 데이터가 아직 없어요.</div>';
+  if (!S.hasData) h += '<div class="note">국토부 인증키를 입력하면 시세가 표시돼요.</div>';
   else if (!all.length) h += `<div class="note">최근 ${S.months}개월 거래가 없어요. 기간을 늘리거나, 실거래 신고 단지명이 달라 매칭되지 않았을 수 있어요.</div>`;
   else {
     h += '<div class="chips">' + [...types.keys()].sort((a, b) => a - b).map(k => `<button data-t="${k}" class="${S.dtype === k ? 'on' : ''}">${k}㎡ (${pyeong(k)}평) ${types.get(k)}</button>`).join('') +
@@ -203,7 +266,7 @@ function doSearch(pick) { const q = $('#q').value.trim(); if (!q) return; search
 function bind() {
   $('#band').innerHTML = BANDS.map(b => `<option value="${b.k}">${b.t}</option>`).join('');
   $('#rad').onchange = () => { S.rad = +$('#rad').value; if (circle) circle.setRadius(S.rad); refresh(true); };
-  $('#mon').onchange = () => { S.months = +$('#mon').value; recompute(); };
+  $('#mon').onchange = () => { S.months = +$('#mon').value; if (S.center) refresh(false); };
   $('#band').onchange = () => { S.band = $('#band').value; S.dtype = null; recompute(); };
   $('#metric').onchange = () => { S.metric = $('#metric').value; recompute(); };
   $('#sort').onchange = () => { S.sort = $('#sort').value; recompute(); };
@@ -226,8 +289,15 @@ function loadKakao() {
     s.onload = () => kakao.maps.load(res); s.onerror = () => rej(new Error('카카오 지도 스크립트를 불러오지 못했어요.')); document.head.appendChild(s);
   });
 }
+function renderKey() {
+  let el = $('#keybox'); if (!el) { el = document.createElement('div'); el.id = 'keybox'; el.className = 'keybox'; $('.ctrl').after(el); }
+  if (KEY) { el.innerHTML = '<span>국토부 인증키 저장됨 (이 브라우저에만)</span> <button id="kchg">변경</button>'; $('#kchg').onclick = () => { KEY = ''; S.hasData = false; renderKey(); }; return; }
+  el.innerHTML = '<input id="kin" type="password" autocomplete="off" placeholder="국토부 실거래가 인증키 붙여넣기"><button id="ksave" class="pri">저장</button><small>키는 이 브라우저에만 저장되고 사이트나 저장소에는 올라가지 않아요.</small>';
+  $('#ksave').onclick = () => { const v = $('#kin').value.trim(); if (!v) return; KEY = v; try { localStorage.setItem('molit_key', v); } catch (e) {}
+    S.hasData = true; apiIdx = 0; apiLocked = false; renderKey(); if (S.center) refresh(false); else status('주소를 검색하면 시세가 표시돼요.'); };
+}
 async function init() {
-  bind(); renderList();
+  bind(); renderKey(); renderList();
   try { await loadComplexes(); } catch (e) { status('단지 데이터를 불러오지 못했어요: ' + e.message, true); return; }
   if (!cfg.KAKAO_JS_KEY && !cfg.SDK_URL) { status('카카오 JavaScript 키가 설정되지 않았어요. (저장소 Settings > Variables 에 KAKAO_JS_KEY 등록 후 다시 배포)', true); return; }
   try { await loadKakao(); } catch (e) { status(e.message + ' 카카오 개발자 콘솔에 이 사이트 주소가 등록돼 있는지 확인하세요.', true); return; }
@@ -240,7 +310,7 @@ async function init() {
     setCenter(lat, lon, '지도에서 선택한 위치', { keepView: true });
     geocoder.coord2Address(lon, lat, (r, st) => { if (st === kakao.maps.services.Status.OK && r[0]) {
       const a = (r[0].address && r[0].address.address_name) || ''; if (a && S.center && S.center.lat === lat) { S.center.label = a; renderList(); } } }); });
-  if (!S.hasData) status('시세 데이터가 아직 없어요. 저장소의 Actions에서 수집을 한 번 실행해 주세요.', true);
+  if (!S.hasData) status('아래에 국토부 인증키를 입력하면 시세가 표시돼요.');
 }
 init();
 })();

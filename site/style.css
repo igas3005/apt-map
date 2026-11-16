@@ -62,3 +62,5 @@ th:first-child,td:first-child{text-align:left}
   #app{display:flex;flex-direction:column;height:auto;min-height:100%}
   #map{order:1;height:55vh;flex:none}#side{order:2;border-right:0}
 }
+.keybox{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12.5px;color:var(--mute)}
+.keybox input{flex:1;min-width:0}.keybox small{flex-basis:100%;font-size:11.5px}.keybox button{padding:5px 10px}

@@ -1,8 +1,6 @@
-name: 시세 수집 및 사이트 배포
+name: 사이트 배포
 
 on:
-  schedule:
-    - cron: "30 19 * * *"   # 매일 04:30 (한국시간)
   workflow_dispatch:         # Actions 탭에서 수동 실행
   push:
     branches: [main]
@@ -19,27 +17,15 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - run: pip install requests
 
       - name: 카카오 JavaScript 키 주입
         env:
           KAKAO_JS_KEY: ${{ vars.KAKAO_JS_KEY }}
         run: |
           printf 'window.APP_CONFIG = { KAKAO_JS_KEY: "%s" };\n' "$KAKAO_JS_KEY" > site/config.js
-
-      - name: 실거래 수집
-        continue-on-error: true   # 수집이 실패해도 지도는 배포되도록 함 (로그에서 원인 확인)
-        env:
-          DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
-          MONTHS: "12"
-        run: python scripts/collect.py
 
       - uses: actions/configure-pages@v5
 
@@ -50,6 +36,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
