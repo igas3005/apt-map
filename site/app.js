@@ -87,6 +87,7 @@ async function fetchMonth(f, ym) {
       const ymd = (+v('dealYear')) * 10000 + (+v('dealMonth')) * 100 + (+v('dealDay'));
       if (!amt || !area || !ymd) continue;
       const id = matchRow(f, v('umdNm'), v('jibun'), v('aptNm')); if (id == null) continue;
+      const by = +v('buildYear'); if (by) BY.set(id, by);
       got.push([id, [ymd, area, parseInt(v('floor'), 10) || 0, amt]]); }
     if (page * 1000 >= res.total || !res.items.length) break; page++;
   }
@@ -108,6 +109,62 @@ function liveErrText(e) {
   return '실거래 조회 오류: ' + (e.msg || '알 수 없음');
 }
 const tradesOf = id => LIVE.get(id) || [];
+
+/* ---------- 건축물대장 표제부: 세대수·사용승인연도·층수 ---------- */
+// 단지 지번으로 조회하고, 결과는 바뀌지 않는 값이라 이 브라우저에 저장해 다시 조회하지 않는다.
+const BLD_API = 'https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo';
+let BLD = {}; try { BLD = JSON.parse(localStorage.getItem('bld_v1') || '{}') || {}; } catch (e) {}
+const BY = new Map(); let bldSaveT = 0, bldErr = null;
+const bkey = c => c.code + '|' + c.umd + '|' + c.jibun;
+function bldSave() { clearTimeout(bldSaveT); bldSaveT = setTimeout(() => { try { localStorage.setItem('bld_v1', JSON.stringify(BLD)); } catch (e) {} }, 800); }
+function regionCode(c) { return new Promise(res => geocoder.coord2RegionCode(c.lon, c.lat, (r, st) => {
+  if (st !== kakao.maps.services.Status.OK) return res(null); const b = r.find(x => x.region_type === 'B'); res(b && b.code ? String(b.code) : null); })); }
+async function fetchBld(c) {
+  const m = c.jibun.match(/^(산)?(\d+)(?:-(\d+))?$/); if (!m) return 0;
+  const rc = await regionCode(c); if (!rc || rc.length < 10) return 0;
+  let key = KEY; try { key = decodeURIComponent(KEY); } catch (e) {}
+  const rows = [];
+  for (let page = 1; page <= 4; page++) {
+    const u = BLD_API + '?' + new URLSearchParams({ serviceKey: key, sigunguCd: rc.slice(0, 5), bjdongCd: rc.slice(5, 10), platGbCd: m[1] ? '1' : '0',
+      bun: m[2].padStart(4, '0'), ji: (m[3] || '0').padStart(4, '0'), numOfRows: 100, pageNo: page });
+    let r; try { r = await fetch(u); } catch (e) { throw { kind: 'net' }; }
+    if (r.status === 401 || r.status === 403) throw { kind: 'key', msg: 'HTTP ' + r.status };
+    if (!r.ok) throw { kind: 'api', msg: 'HTTP ' + r.status };
+    const doc = new DOMParser().parseFromString(await r.text(), 'text/xml');
+    const g = t => { const e = doc.getElementsByTagName(t)[0]; return e ? e.textContent.trim() : ''; };
+    if (doc.documentElement.nodeName.indexOf('OpenAPI') === 0 || g('returnAuthMsg')) throw { kind: 'key', msg: g('returnAuthMsg') || g('errMsg') };
+    const rcode = g('resultCode'); if (rcode && rcode !== '00' && rcode !== '000') throw { kind: 'api', msg: rcode + ' ' + g('resultMsg') };
+    const items = [...doc.getElementsByTagName('item')];
+    for (const it of items) { const v = t => { const e = it.getElementsByTagName(t)[0]; return e ? e.textContent.trim() : ''; };
+      rows.push({ main: v('mainAtchGbCd') !== '1', hh: +v('hhldCnt') || 0, up: +v('grndFlrCnt') || 0, dn: +v('ugrndFlrCnt') || 0, y: +(v('useAprDay').slice(0, 4)) || 0 }); }
+    if (page * 100 >= (+g('totalCount') || 0) || !items.length) break;
+  }
+  let use = rows.filter(x => x.main && x.hh > 0); if (!use.length) use = rows.filter(x => x.main); if (!use.length) return 0;
+  const ys = use.map(x => x.y).filter(y => y > 1900);
+  return [use.reduce((a, x) => a + x.hh, 0), ys.length ? Math.min(...ys) : 0, Math.max(...use.map(x => x.up)), Math.max(...use.map(x => x.dn)), use.filter(x => x.hh > 0).length];
+}
+async function loadBld(tok) {
+  if (!KEY || bldErr || !geocoder) return;
+  const todo = S.list.slice(0, 80).map(i => C[i.id]).filter(c => BLD[bkey(c)] === undefined);
+  if (!todo.length) return;
+  let k = 0, last = 0;
+  const worker = async () => { while (k < todo.length && tok === S.token && !bldErr) { const c = todo[k++];
+    try { BLD[bkey(c)] = await fetchBld(c); bldSave(); } catch (e) { if (e.kind === 'key' || e.kind === 'net') bldErr = e; }
+    if (tok === S.token && Date.now() - last > 500) { last = Date.now(); renderList(); } } };
+  await Promise.all(Array.from({ length: 4 }, worker));
+  if (tok !== S.token) return;
+  renderList(); if (S.sel != null) renderDetail();
+  if (bldErr && !S.liveErr) status(bldErr.kind === 'key'
+    ? '세대수·층수(건축물대장) 조회가 거절됐어요 (' + (bldErr.msg || '') + '). 활용신청 승인이 아직 반영되지 않았을 수 있어요. 잠시 뒤 새로고침해 보세요.'
+    : '세대수·층수(건축물대장) API에 접속하지 못했어요. 이 문구를 그대로 알려 주세요.', true);
+}
+function infoLine(c) {
+  const b = BLD[bkey(c)], parts = [], y = (b && b[1]) || BY.get(c.id);
+  if (b && b[0]) parts.push(b[0].toLocaleString('ko-KR') + '세대' + (b[4] > 1 ? `(${b[4]}개동)` : ''));
+  if (y) parts.push(y + '년');
+  if (b && b[2]) parts.push((b[3] ? `지하${b[3]}/` : '') + `지상${b[2]}층`);
+  return parts.join(' · ');
+}
 function dominant(arr) {            // 거래가 가장 많은 전용면적 타입
   const g = new Map(); for (const t of arr) { const k = Math.round(t[1]); (g.get(k) || g.set(k, []).get(k)).push(t); }
   let best = null;
@@ -144,6 +201,7 @@ async function refresh(fit) {
   } else status('아래에 국토부 인증키를 입력하면 시세가 표시돼요.');
   recompute();
   if (fit && circle) map.setBounds(circle.getBounds());
+  loadBld(tok);
 }
 function recompute() {
   S.sum = new Map(S.list.map(i => [i.id, summarize(i.id)]));
@@ -192,9 +250,9 @@ function renderList() {
   const n = S.list.length;
   let h = `<div class="lh"><b>${esc(S.center.label || '선택한 위치')}</b> 반경 ${S.rad >= 1000 ? S.rad / 1000 + 'km' : S.rad + 'm'} · 단지 ${n.toLocaleString('ko-KR')}개${n > 300 ? ' (가까운 300개 표시)' : ''}</div>`;
   if (!n) h += '<div class="empty">이 반경에 등록된 단지가 없어요.<br>반경을 넓혀 보세요.</div>';
-  h += S.list.slice(0, 300).map(it => { const c = C[it.id], s = S.sum.get(it.id);
+  h += S.list.slice(0, 300).map(it => { const c = C[it.id], s = S.sum.get(it.id), inf = infoLine(c);
     const px = s ? `<div class="px"><b>${eok(s.val)}</b><small>${s.py}평 · ${s.cnt}건</small></div>` : (S.hasData ? '<div class="px"><small>거래 없음</small></div>' : '');
-    return `<div class="item${S.sel === it.id ? ' sel' : ''}" data-id="${it.id}"><div class="n"><div class="nm">${esc(c.name)}</div><div class="ad">${esc(c.umd)} ${esc(c.jibun)} · ${it.d < 1000 ? Math.round(it.d) + 'm' : (it.d / 1000).toFixed(2) + 'km'}</div></div>${px}</div>`; }).join('');
+    return `<div class="item${S.sel === it.id ? ' sel' : ''}" data-id="${it.id}"><div class="n"><div class="nm">${esc(c.name)}</div><div class="ad">${esc(c.umd)} ${esc(c.jibun)} · ${it.d < 1000 ? Math.round(it.d) + 'm' : (it.d / 1000).toFixed(2) + 'km'}</div>${inf ? `<div class="inf">${inf}</div>` : ''}</div>${px}</div>`; }).join('');
   el.innerHTML = h;
 }
 function select(id, pan) {
@@ -225,7 +283,7 @@ function renderDetail() {
   const dom = dominant(all.filter(t => t[1] >= bandOf().a && t[1] < bandOf().b)) || dominant(all);
   if (S.dtype == null) S.dtype = dom ? dom.k : 'all';
   const arr = S.dtype === 'all' ? all : all.filter(t => Math.round(t[1]) === S.dtype);
-  let h = `<button class="x" id="dx">닫기</button><h2>${esc(c.name)}</h2><div class="ad">${esc(c.sido)} ${esc(c.gu)} ${esc(c.umd)} ${esc(c.jibun)}</div>`;
+  let h = `<button class="x" id="dx">닫기</button><h2>${esc(c.name)}</h2><div class="ad">${esc(c.sido)} ${esc(c.gu)} ${esc(c.umd)} ${esc(c.jibun)}${infoLine(c) ? '<br>' + infoLine(c) : ''}</div>`;
   if (!S.hasData) h += '<div class="note">국토부 인증키를 입력하면 시세가 표시돼요.</div>';
   else if (!all.length) h += `<div class="note">최근 ${S.months}개월 거래가 없어요. 기간을 늘리거나, 실거래 신고 단지명이 달라 매칭되지 않았을 수 있어요.</div>`;
   else {
@@ -294,7 +352,7 @@ function renderKey() {
   if (KEY) { el.innerHTML = '<span>국토부 인증키 저장됨 (이 브라우저에만)</span> <button id="kchg">변경</button>'; $('#kchg').onclick = () => { KEY = ''; S.hasData = false; renderKey(); }; return; }
   el.innerHTML = '<input id="kin" type="password" autocomplete="off" placeholder="국토부 실거래가 인증키 붙여넣기"><button id="ksave" class="pri">저장</button><small>키는 이 브라우저에만 저장되고 사이트나 저장소에는 올라가지 않아요.</small>';
   $('#ksave').onclick = () => { const v = $('#kin').value.trim(); if (!v) return; KEY = v; try { localStorage.setItem('molit_key', v); } catch (e) {}
-    S.hasData = true; apiIdx = 0; apiLocked = false; renderKey(); if (S.center) refresh(false); else status('주소를 검색하면 시세가 표시돼요.'); };
+    S.hasData = true; apiIdx = 0; apiLocked = false; bldErr = null; renderKey(); if (S.center) refresh(false); else status('주소를 검색하면 시세가 표시돼요.'); };
 }
 async function init() {
   bind(); renderKey(); renderList();
