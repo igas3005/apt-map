@@ -503,6 +503,38 @@ function openSilv(key) {
 // 범위: 대상지와 같은 동(읍·면 지역은 읍·면 전체). 준공 5년 이내 단지 → 없으면 10년 이내 → 없으면 전체.
 // 실거래: 단지별 최근 1년, 1년 내 거래가 없으면 최근 2년. 단지별 면적타입 요약(최고·최저·중위·평균)과 최근 5건.
 function loadScript(src) { return new Promise((res, rej) => { if (window.PptxGenJS) return res(); const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = () => rej(new Error('PPT 라이브러리를 불러오지 못했어요.')); document.head.appendChild(el); }); }
+// 위치도: OpenStreetMap 배경 위에 대상지와 비교 단지를 번호로 찍어 이미지로 만든다. 배경을 못 받으면 배경 없이 위치 관계만 그린다.
+async function mapImage(center, pts, W, H) {
+  const X0 = (lon, z) => (lon + 180) / 360 * 256 * 2 ** z, Y0 = (lat, z) => (1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * 256 * 2 ** z;
+  const all = [center].concat(pts); let z = 17;
+  for (; z > 8; z--) { const xs = all.map(p => X0(p.lon, z)), ys = all.map(p => Y0(p.lat, z)); if (Math.max(...xs) - Math.min(...xs) <= W - 260 && Math.max(...ys) - Math.min(...ys) <= H - 220) break; }
+  const xs = all.map(p => X0(p.lon, z)), ys = all.map(p => Y0(p.lat, z)), ox = (Math.min(...xs) + Math.max(...xs)) / 2 - W / 2, oy = (Math.min(...ys) + Math.max(...ys)) / 2 - H / 2;
+  const draw = async withTiles => {
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const g = cv.getContext('2d'); g.fillStyle = '#EEF1F5'; g.fillRect(0, 0, W, H); let got = 0;
+    if (withTiles) { const jobs = [];
+      for (let tx = Math.floor(ox / 256); tx <= Math.floor((ox + W) / 256); tx++) for (let ty = Math.floor(oy / 256); ty <= Math.floor((oy + H) / 256); ty++)
+        jobs.push(new Promise(res => { const im = new Image(); im.crossOrigin = 'anonymous'; const to = setTimeout(() => res(), 9000);
+          im.onload = () => { clearTimeout(to); try { g.drawImage(im, Math.round(tx * 256 - ox), Math.round(ty * 256 - oy)); got++; } catch (e) {} res(); }; im.onerror = () => { clearTimeout(to); res(); };
+          im.src = `https://tile.openstreetmap.org/${z}/${tx}/${ty}.png`; }));
+      if (jobs.length > 60) return null; await Promise.all(jobs);
+      g.fillStyle = 'rgba(255,255,255,.28)'; g.fillRect(0, 0, W, H);
+    } else { g.strokeStyle = '#DDE2E9'; g.lineWidth = 1; for (let x = 0; x < W; x += 80) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); } for (let y = 0; y < H; y += 80) { g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); } }
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    pts.forEach((p, i) => { const x = X0(p.lon, z) - ox, y = Y0(p.lat, z) - oy; g.beginPath(); g.arc(x, y, 26, 0, 6.283); g.fillStyle = '#12263F'; g.fill(); g.lineWidth = 3.5; g.strokeStyle = '#fff'; g.stroke();
+      g.fillStyle = '#fff'; g.font = 'bold 26px sans-serif'; g.fillText(String(i + 1), x, y + 2); });
+    const cx = X0(center.lon, z) - ox, cy = Y0(center.lat, z) - oy;
+    g.beginPath(); g.arc(cx, cy, 20, 0, 6.283); g.fillStyle = '#D93025'; g.fill(); g.lineWidth = 4; g.strokeStyle = '#fff'; g.stroke();
+    g.font = 'bold 28px sans-serif'; const tw = g.measureText('대상지').width + 26; g.fillStyle = '#D93025'; g.fillRect(cx - tw / 2, cy - 70, tw, 40); g.fillStyle = '#fff'; g.fillText('대상지', cx, cy - 49);
+    // 축척 막대
+    const mpp = 156543.03392 * Math.cos(center.lat * Math.PI / 180) / 2 ** z, steps = [100, 200, 500, 1000, 2000, 5000], sm = steps.find(v => v / mpp >= 110) || 5000, sw = sm / mpp;
+    g.fillStyle = 'rgba(255,255,255,.9)'; g.fillRect(18, H - 54, sw + 24, 38); g.fillStyle = '#1B2430'; g.fillRect(30, H - 28, sw, 4); g.font = '17px sans-serif'; g.textAlign = 'left'; g.fillText(sm >= 1000 ? sm / 1000 + 'km' : sm + 'm', 30, H - 40);
+    if (withTiles) { g.font = '15px sans-serif'; const t = '© OpenStreetMap contributors', w2 = g.measureText(t).width + 16; g.fillStyle = 'rgba(255,255,255,.85)'; g.fillRect(W - w2 - 8, H - 32, w2, 24); g.fillStyle = '#333'; g.fillText(t, W - w2, H - 20); }
+    try { return { data: cv.toDataURL('image/png'), tiles: withTiles && got > 0 }; } catch (e) { return null; }
+  };
+  let r = null; try { r = await draw(true); } catch (e) {}
+  if (!r || !r.tiles) r = await draw(false);
+  return r;
+}
 const ymdAgo = m => ymdOf(new Date(S.asOf.getFullYear(), S.asOf.getMonth() - m, S.asOf.getDate()));
 async function makeReport() {
   if (!S.center) return status('먼저 주소를 검색해 대상지를 정해 주세요.', true);
@@ -550,7 +582,7 @@ async function makeReport() {
     const page = (headline, tag) => { const sl = pres.addSlide(); pageNo++; sl.background = { color: 'FFFFFF' };
       sl.addText(tag, { x: LX, y: 0.32, w: 8, h: 0.24, fontFace: F, fontSize: 9, bold: true, color: ACC, margin: 0, isTextBox: true });
       sl.addText(headline, { x: LX, y: 0.56, w: LW, h: 0.62, fontFace: F, fontSize: 20, bold: true, color: INK, margin: 0, valign: 'middle', isTextBox: true, fit: 'shrink' });
-      sl.addText(`출처: 국토교통부 실거래가 공개시스템, K-apt, 청약홈 · 기준일 ${today} · 해제 거래 제외 · 참고용`, { x: LX, y: 7.08, w: 10.5, h: 0.22, fontFace: F, fontSize: 8, color: MUTE, margin: 0, isTextBox: true });
+      sl.addText(`출처: 국토교통부 실거래가 공개시스템, K-apt, 청약홈, 지도 © OpenStreetMap · 기준일 ${today} · 해제 거래 제외 · 참고용`, { x: LX, y: 7.08, w: 10.5, h: 0.22, fontFace: F, fontSize: 8, color: MUTE, margin: 0, isTextBox: true });
       sl.addText(String(pageNo), { x: 12.08, y: 7.08, w: 0.7, h: 0.22, fontFace: F, fontSize: 8, color: MUTE, align: 'right', margin: 0, isTextBox: true });
       return sl; };
     const kpi = (sl, x, y, w, label, value, sub) => { sl.addShape(pres.ShapeType.rect, { x, y, w, h: 1.15, fill: { color: BG }, line: { color: BG, width: 0 } });
@@ -589,6 +621,15 @@ async function makeReport() {
       noTr.length ? `최근 2년 거래가 없는 단지 ${noTr.length}개는 요약표에만 표시` : '대상 단지 모두 최근 2년 내 거래 있음'].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
       { x: 8.3, y: 3.1, w: 4.45, h: 3.6, fontFace: F, fontSize: 10.5, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 8, isTextBox: true });
 
+    // 위치도
+    status('기초자료 준비 중… 위치도 작성');
+    const mapPts = pick.slice(0, 30), mi = await mapImage(S.center, mapPts.map(r => ({ lat: r.c.lat, lon: r.c.lon })), 1640, 1100), far = Math.max(...mapPts.map(r => r.d));
+    sl = page(`대상지에서 ${far < 1000 ? Math.round(far) + 'm' : (far / 1000).toFixed(1) + 'km'} 안에 비교 단지 ${mapPts.length}개가 분포`, 'LOCATION');
+    if (mi) sl.addImage({ data: mi.data, x: LX, y: 1.4, w: 8.2, h: 5.5 });
+    sl.addText(mi && mi.tiles ? '번호는 단지 요약표와 같습니다.' : '배경지도를 받지 못해 위치 관계만 표시했습니다. 번호는 단지 요약표와 같습니다.', { x: LX, y: 6.92, w: 8.2, h: 0.16, fontFace: F, fontSize: 7.5, color: MUTE, margin: 0, isTextBox: true });
+    tbl(sl, [['No.', '단지명', '준공', '거리'].map(TH)].concat(mapPts.slice(0, 18).map((r, i) => [cell(i + 1, { bold: true, color: NAVY }), cell(r.c.name, { align: 'left' }), cell(r.year || '-'), cell(r.d < 1000 ? Math.round(r.d) + 'm' : (r.d / 1000).toFixed(1) + 'km')])), 8.95, 1.4, 3.83, [0.45, 2.1, 0.6, 0.68], 8.5, 0.27);
+    if (mapPts.length > 18) sl.addText(`19번 이후 ${mapPts.length - 18}개 단지는 단지 요약표 참조`, { x: 8.95, y: 6.6, w: 3.8, h: 0.2, fontFace: F, fontSize: 8, color: MUTE, margin: 0, isTextBox: true });
+
     // 추이
     const ms = []; for (let k = 23; k >= 0; k--) { const d = new Date(S.asOf.getFullYear(), S.asOf.getMonth() - k, 1); ms.push(d.getFullYear() * 100 + d.getMonth() + 1); }
     const allPairs = pick.flatMap(r => r.all.map(t => [r, t]));
@@ -604,7 +645,7 @@ async function makeReport() {
     // 단지 요약표
     const sumHead = ['단지명', '준공', '세대수', '층수', '주력 전용', '거래 건수', '중위가', '최고가', '최저가', '평당가(중위)', '공급/전용', '기간'].map(TH), sumW = [3.0, 0.7, 0.8, 0.95, 0.9, 0.85, 1.05, 1.05, 1.05, 1.08, 0.9, 0.7];
     const sumRows = pick.map(r => { const m = sumOf(r);
-      return [cell(r.c.name, { align: 'left', bold: true }), cell(r.year || '-'), cell(r.hh ? n(r.hh) : '-'), cell(r.up ? (r.dn ? `B${r.dn}/` : '') + r.up + 'F' : '-'), cell(m ? m.type + '㎡' : '-'), cell(m ? m.cnt : 0), cell(m ? n(m.med) : '-'), cell(m ? n(m.max) : '-'), cell(m ? n(m.min) : '-'), cell(m ? n(m.ppy) : '-', { bold: true, color: NAVY }), cell(r.ratio ? r.ratio.toFixed(2) : '1.32*', r.ratio ? {} : { color: WARN }), cell(m ? r.span + '년' : '-')]; });
+      return [cell(`${pick.indexOf(r) + 1}. ${r.c.name}`, { align: 'left', bold: true }), cell(r.year || '-'), cell(r.hh ? n(r.hh) : '-'), cell(r.up ? (r.dn ? `B${r.dn}/` : '') + r.up + 'F' : '-'), cell(m ? m.type + '㎡' : '-'), cell(m ? m.cnt : 0), cell(m ? n(m.med) : '-'), cell(m ? n(m.max) : '-'), cell(m ? n(m.min) : '-'), cell(m ? n(m.ppy) : '-', { bold: true, color: NAVY }), cell(r.ratio ? r.ratio.toFixed(2) : '1.32*', r.ratio ? {} : { color: WARN }), cell(m ? r.span + '년' : '-')]; });
     for (let i = 0; i < Math.max(sumRows.length, 1); i += 16) {
       sl = page(`대상 ${pick.length}개 단지 요약: 평당가 ${det.length ? n(Math.min(...det.map(r => sumOf(r).ppy))) + '~' + n(Math.max(...det.map(r => sumOf(r).ppy))) + '만원' : '거래 없음'}${i ? ' (계속)' : ''}`, 'COMPARABLE SET');
       tbl(sl, [sumHead].concat(sumRows.slice(i, i + 16)), LX, 1.4, LW, sumW, 9, 0.3);
