@@ -337,7 +337,7 @@ function salesOf(sido) {
         try { const rows = local(await odPages(path, cond, pages)); log.push(Object.keys(cond).length + '개 조건 → ' + rows.length + '건 (' + ST.meta + ')'); if (rows.length) { ST.log = log.join(' / '); return rows; } }
         catch (e) { if (e.kind !== 'api') throw e; last = e; log.push(Object.keys(cond).length + '개 조건 → 오류 ' + (e.msg || '')); }
       }
-      ST.log = log.join(' / '); if (last && log.every(x => x.includes('오류'))) throw last; return [];
+      ST.log = log.join(' / '); SALES.delete(k); if (last && log.every(x => x.includes('오류'))) throw last; return [];
     })()
       .catch(e => { SALES.delete(k); throw e; })); }
   return SALES.get(k);
@@ -366,8 +366,8 @@ function renderSaleTab() {
 function renderSaleList() {
   const el = document.getElementById('slist'); if (!el || S.tab !== 'sale') return;
   let h = '';
-  if (NOTICES.length) h += '<div class="lh"><b>분양 분석</b> 모집공고 요약·PPT ' + NOTICES.length + '건</div>' + NOTICES.map(n => `<div class="item nitem" data-nid="${esc(n.id)}"><div class="n"><div class="nm">${esc(n.name)}</div><div class="ad">${esc(n.addr)} · 공고 ${esc(n.noticeDate)}</div></div><div class="px"><small>요약·PPT</small></div></div>`).join('');
-  h += '<div class="lh"><b>청약홈 분양정보</b> ';
+  if (NOTICES.length) h += '<details class="nbox"><summary>분석해 둔 모집공고 요약·PPT ' + NOTICES.length + '건 보기</summary>' + NOTICES.map(n => `<div class="item nitem" data-nid="${esc(n.id)}"><div class="n"><div class="nm">${esc(n.name)}</div><div class="ad">${esc(n.addr)} · 공고 ${esc(n.noticeDate)}</div></div><div class="px"><small>요약·PPT</small></div></div>`).join('') + '</details>';
+  h += '<div class="lh"><button id="sre" style="float:right;padding:2px 9px;font-size:12px">다시 조회</button><b>청약홈 분양정보</b> ';
   if (!KEY) h += '</div><div class="empty">국토부 인증키를 입력하면 조회돼요.</div>';
   else if (ST.loading) h += '조회 중…</div>';
   else if (ST.err) h += `</div><div class="status err" style="margin:10px 14px">${esc(ST.err)} 이 문구를 그대로 알려 주세요.</div>`;
@@ -380,12 +380,13 @@ function renderSaleList() {
     h += `${ST.sido} 최근 ${ST.years}년 ${inYears.length}건${toks.length ? ' 중 ' + rows.length + '건' : ''} <small>(받은 자료: 최근 3년 ${ST.rows.length}건)</small></div>`;
     if (ST.diag) h += `<div class="status err" style="margin:10px 14px">${esc(ST.diag)} 이 문구를 그대로 알려 주세요.</div>`;
     if (!rows.length) h += '<div class="empty">조건에 맞는 공고가 없어요.</div>';
-    if (!ST.rows.length && ST.log) h += `<div class="status err" style="margin:10px 14px">청약홈 조회 결과가 0건이에요. 진단: ${esc(ST.log)} — 이 문구를 그대로 알려 주세요.</div>`;
+    if (!ST.rows.length && ST.log) h += `<div class="status err" style="margin:10px 14px">청약홈 서버가 지금 자료를 한 건도 주지 않고 있어요 (조건 없이 물어도 0건). 서버 쪽 일시 현상일 수 있으니 잠시 뒤 '다시 조회'를 눌러 보세요.<br><small>진단: ${esc(ST.log)}</small></div>`;
     h += rows.slice(0, 200).map(r => { const id = String(r.HOUSE_MANAGE_NO), an = NOTICES.some(n => n.id === id);
       return `<div class="item${xsel === 's' + id ? ' sel' : ''}" data-sid="${esc(id)}"><div class="n"><div class="nm">${esc(r.HOUSE_NM || '(이름 없음)')}</div><div class="ad">${esc(r.HSSPLY_ADRES || '')}</div><div class="inf">공고 ${esc(r.RCRIT_PBLANC_DE || '-')} · ${esc(r.TOT_SUPLY_HSHLDCO == null ? '-' : r.TOT_SUPLY_HSHLDCO)}세대${r.MVN_PREARNGE_YM ? ' · 입주 ' + esc(r.MVN_PREARNGE_YM) : ''}</div></div><div class="px"><small>${an ? '분석 요약 있음' : '경쟁률'}</small></div></div>`; }).join('');
     if (rows.length > 200) h += '<div class="lh">최근 200건만 표시했어요. 시군구나 단지명으로 좁혀 보세요.</div>';
   }
   el.innerHTML = h;
+  const re = document.getElementById('sre'); if (re) re.onclick = () => { SALES.delete(ST.sido); loadSaleTab(); };
 }
 function setTab(t) {
   S.tab = t; document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
@@ -464,8 +465,13 @@ async function openSale(id) {
   h += '<table class="kvt">' + row('모집공고일', r.RCRIT_PBLANC_DE) + row('공급세대', r.TOT_SUPLY_HSHLDCO) + row('청약접수', (r.RCEPT_BGNDE || '') + (r.RCEPT_ENDDE ? ' ~ ' + r.RCEPT_ENDDE : '')) + row('당첨자 발표', r.PRZWNER_PRESNATN_DE) +
     row('계약', (r.CNTRCT_CNCLS_BGNDE || '') + (r.CNTRCT_CNCLS_ENDDE ? ' ~ ' + r.CNTRCT_CNCLS_ENDDE : '')) + row('입주예정', r.MVN_PREARNGE_YM) + row('시공사', r.CNSTRCT_ENTRPS_NM) + row('사업주체', r.BSNS_MBY_NM) + row('주택구분', r.HOUSE_DTL_SECD_NM || r.HOUSE_SECD_NM) + '</table>';
   h += '<div id="sx"><div class="note">주택형·경쟁률 불러오는 중…</div></div><div id="sv"></div>';
-  h += '<div class="note">층별 분양가·발코니 확장비·중도금 조건은 모집공고문 분석이 필요해요. 공고문을 Claude에게 보내면 요약과 PPT로 만들어 여기에 올릴 수 있어요.</div>';
+  h += '<div class="reqbox"><button id="rq" class="pri">모집공고 요약 요청하기</button><div id="rqo" class="note">층별 분양가·발코니 확장비·중도금 조건을 정리한 요약과 PPT를 Claude에게 요청할 때 눌러 주세요.</div></div>';
   el.innerHTML = h; $('#dx').onclick = () => { xsel = null; salePin = null; el.hidden = true; renderExtraPins(); renderSaleList(); };
+  $('#rq').onclick = () => {
+    const txt = `아래 단지 입주자모집공고를 분석해서 회사 양식 PPT로 만들고, 사이트(apt-map)에도 요약을 올려줘.\n- 단지명: ${name}\n- 주택관리번호: ${id}\n- 공급위치: ${addr}\n- 모집공고일: ${r.RCRIT_PBLANC_DE || ''}\n- 청약홈 공고: ${r.PBLANC_URL || ''}\n(공고문 PDF 첨부)`;
+    const done = ok => { $('#rqo').innerHTML = (ok ? '<b>요청 문구를 복사했어요.</b> ' : '<b>아래 문구를 복사하세요.</b> ') + 'Claude 대화창에 붙여넣고, 청약홈에서 받은 공고문 PDF를 함께 첨부해 보내면 돼요. 완성되면 이 단지에 "분석 요약"이 붙어요.' +
+      ` <a href="https://claude.ai" target="_blank" rel="noopener">Claude 열기</a><textarea readonly style="width:100%;height:110px;margin-top:6px;font:12px/1.4 inherit">${esc(txt)}</textarea>`; };
+    try { navigator.clipboard.writeText(txt).then(() => done(true), () => done(false)); } catch (e) { done(false); } };
   saleExtra(id).then(ex => { const sx = document.getElementById('sx'); if (sx && xsel === 's' + id) sx.innerHTML = ex; });
   // 위치를 찾아 지도 이동, 그 시군구의 분양권·입주권 거래 중 이름이 맞는 것을 붙인다
   const g = await geocodeLoose(addr); if (xsel !== 's' + id) return;
