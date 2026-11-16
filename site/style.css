@@ -74,3 +74,5 @@ details{margin-top:8px}summary{cursor:pointer;color:var(--accent);font-size:12.5
 .pin.spin{background:#0f766e;z-index:7}.pin.spin::after{border-top-color:#0f766e}.pin.spin b{font-size:12px}
 .pin.vpin{background:#7c3aed;z-index:6}.pin.vpin::after{border-top-color:#7c3aed}
 .pin.spin.sel,.pin.vpin.sel{background:var(--sel)}.pin.spin.sel::after,.pin.vpin.sel::after{border-top-color:var(--sel)}
+.tabs{display:flex;gap:6px;margin-bottom:10px}.tabs button{flex:1;padding:7px 6px;font-size:12.5px}
+.tabs button.on{background:var(--accent);border-color:var(--accent);color:#fff}
