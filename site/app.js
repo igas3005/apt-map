@@ -125,7 +125,7 @@ const tradesOf = id => LIVE.get(id) || [];
 /* ---------- 건축물대장 표제부: 세대수·사용승인연도·층수 ---------- */
 // 단지 지번으로 조회하고, 결과는 바뀌지 않는 값이라 이 브라우저에 저장해 다시 조회하지 않는다.
 const BLD_API = 'https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo';
-let BLD = {}; try { BLD = JSON.parse(localStorage.getItem('bld_v4') || '{}') || {}; } catch (e) {}
+let BLD = {}; try { BLD = JSON.parse(localStorage.getItem('bld_v4') || '{}') || {}; if (!localStorage.getItem('bld_ofix1')) { for (const k in BLD) if (k.slice(0, 2) === 'o|') delete BLD[k]; localStorage.setItem('bld_ofix1', '1'); } } catch (e) {}   // 오피스텔 캐시는 호(실)수 산정 방식 변경으로 한 번 비움
 const BY = new Map(); let bldSaveT = 0, bldErr = null;
 const bkey = c => c.code + '|' + c.umd + '|' + c.jibun;
 function bldSave() { clearTimeout(bldSaveT); bldSaveT = setTimeout(() => { try { localStorage.setItem('bld_v4', JSON.stringify(BLD)); } catch (e) {} }, 800); }
@@ -202,7 +202,7 @@ async function fetchLedger(c, rc, purp) {
     const rcode = g('resultCode'); if (rcode && rcode !== '00' && rcode !== '000') throw { kind: 'api', msg: rcode + ' ' + g('resultMsg') };
     const items = [...doc.getElementsByTagName('item')];
     for (const it of items) { const v = t => { const e = it.getElementsByTagName(t)[0]; return e ? e.textContent.trim() : ''; };
-      rows.push({ main: v('mainAtchGbCd') !== '1', pu: v('mainPurpsCdNm') + ' ' + v('etcPurps'), hh: +v('hhldCnt') || +v('hoCnt') || 0, up: +v('grndFlrCnt') || 0, dn: +v('ugrndFlrCnt') || 0, y: +(v('useAprDay').slice(0, 4)) || 0 }); }
+      rows.push({ main: v('mainAtchGbCd') !== '1', pu: v('mainPurpsCdNm') + ' ' + v('etcPurps'), hh: (purp ? (+v('hoCnt') || +v('hhldCnt')) : (+v('hhldCnt') || +v('hoCnt'))) || 0, up: +v('grndFlrCnt') || 0, dn: +v('ugrndFlrCnt') || 0, y: +(v('useAprDay').slice(0, 4)) || 0 }); }
     if (page * 100 >= (+g('totalCount') || 0) || !items.length) break;
   }
   let use = rows.filter(x => x.main && x.hh > 0); if (!use.length) use = rows.filter(x => x.main); if (!use.length) return 0;
