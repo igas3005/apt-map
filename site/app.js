@@ -51,7 +51,7 @@ let apiIdx = 0, apiLocked = false;
 // 2026년 개편으로 신설된 구는 개편 전 거래가 예전 시군구 코드에 남아 있을 수 있어 함께 조회한다.
 const LEGACY = { '41591': ['41590'], '41593': ['41590'], '41595': ['41590'], '41597': ['41590'],
   '28125': ['28110', '28140'], '28155': ['28110'], '28275': ['28260'], '28290': ['28260'] };
-const LIVE = new Map(), DONE = new Set(), IDX1 = new Map(), IDX2 = new Map();
+const LIVE = new Map(), DONE = new Set(), IDX1 = new Map(), IDX2 = new Map(), UNM = [];   // UNM: 단지 목록에 매칭되지 않아 버려진 실거래
 let KEY = ''; try { KEY = localStorage.getItem('molit_key') || ''; } catch (e) {}
 const nn = s => String(s || '').replace(/\(.*?\)/g, '').replace(/[\s·\-_.,/]/g, '').toLowerCase().replace(/아파트/g, '');
 const push = (m, k, v) => { const a = m.get(k); if (a) a.push(v); else m.set(k, [v]); };
@@ -97,7 +97,7 @@ async function fetchMonth(f, ym) {
       const amt = parseInt(v('dealAmount').replace(/,/g, ''), 10), area = Math.round(parseFloat(v('excluUseAr')) * 100) / 100;
       const ymd = (+v('dealYear')) * 10000 + (+v('dealMonth')) * 100 + (+v('dealDay'));
       if (!amt || !area || !ymd) continue;
-      const id = matchRow(f, v('umdNm'), v('jibun'), v('aptNm')); if (id == null) continue;
+      const id = matchRow(f, v('umdNm'), v('jibun'), v('aptNm')); if (id == null) { UNM.push({ f, ym, umd: v('umdNm'), jibun: v('jibun'), name: v('aptNm') }); continue; }
       const by = +v('buildYear'); if (by) BY.set(id, by);
       got.push([id, [ymd, area, parseInt(v('floor'), 10) || 0, amt]]); }
     if (page * 1000 >= res.total || !res.items.length) break; page++;
@@ -270,6 +270,24 @@ async function geocodeLoose(addr) {
   const a = String(addr || '').replace(/\(.*?\)/g, ' ').replace(/(일원|일대|번지|외\s*\d+\s*필지).*$/, '').replace(/\s+/g, ' ').trim();
   const toks = a.split(' ');
   for (let k = 0; k < 3 && toks.length >= 3; k++) { const v = await geocodeAddr(toks.join(' ')); if (v) return v; toks.pop(); }
+  return null;
+}
+// 분양 단지 위치: 주소 → 단지명 → 지구명 → 동 순으로 찾는다. 공공택지('○○지구 내 A-6블록')나 주소가 어긋난 공고는 주소만으로 못 찾는다.
+// 반환 [lat, lon, approx]: approx=true면 지구·동 중심 정도의 개략 위치.
+function kwSearch(q, cityTok) { return new Promise(res => { if (!places) return res(null); places.keywordSearch(q, (r, st) => {
+  if (st !== kakao.maps.services.Status.OK) return res(null); const h = r.find(x => !cityTok || String(x.address_name || '').includes(cityTok)); res(h ? [+h.y, +h.x] : null); }); }); }
+async function geocodeSale(addr, name) {
+  const k = 'sale|' + addr + '|' + name; if (GEO[k]) return GEO[k];
+  const done = v => { if (v) { GEO[k] = v; clearTimeout(geoT); geoT = setTimeout(() => { try { localStorage.setItem('geo_v1', JSON.stringify(GEO)); } catch (e) {} }, 800); } return v; };
+  let v = await geocodeLoose(addr); if (v) return done([v[0], v[1], false]);
+  const adr = String(addr || ''), nm = String(name || '').replace(/\(.*?\)/g, ' ').replace(/(신혼희망타운|공공분양주택?|공공분양|본청약|조합원 취소분|이익공유형 분양주택|잔여세대|무순위|추가\s*모집|입주자\s*모집공고).*$/, '').trim();
+  const city = (adr.match(/(?:경기도|인천광역시|서울특별시)\s+(\S+시(?:\s+\S+구)?|\S+구|\S+군)/) || [])[1] || '', c1 = city.split(' ')[0];
+  if (nm && (v = await kwSearch(city + ' ' + nm, c1))) return done([v[0], v[1], false]);
+  const dist = (adr.match(/([가-힣A-Za-z0-9·\- ]+?(?:지구|역세권|도시개발구역|도시개발사업지구|산업단지))/) || [])[1];
+  if (dist && (v = await kwSearch(city + ' ' + dist.trim().split(' ').slice(-2).join(' '), c1))) return done([v[0], v[1], true]);
+  const dong = (adr.replace(/\(.*?\)/g, ' ').match(/\s([가-힣0-9]+(?:동|읍|면|리|가))[\s,]/) || [])[1];
+  if (dong && (v = await kwSearch(city + ' ' + dong, c1))) return done([v[0], v[1], true]);
+  if (nm && (v = await kwSearch(nm, c1))) return done([v[0], v[1], true]);
   return null;
 }
 function centerRegion() { return new Promise(res => geocoder.coord2RegionCode(S.center.lon, S.center.lat, (r, st) => {
@@ -478,7 +496,7 @@ async function openSale(id) {
     try { navigator.clipboard.writeText(txt).then(() => done(true), () => done(false)); } catch (e) { done(false); } };
   saleExtra(id).then(ex => { const sx = document.getElementById('sx'); if (sx && xsel === 's' + id) sx.innerHTML = ex; });
   // 위치를 찾아 지도 이동, 그 시군구의 분양권·입주권 거래 중 이름이 맞는 것을 붙인다
-  const g = await geocodeLoose(addr); if (xsel !== 's' + id) return;
+  const g = await geocodeSale(addr, name); if (xsel !== 's' + id) return;
   const sv = document.getElementById('sv');
   if (!g) { if (sv) sv.innerHTML = '<div class="note">주소로 위치를 찾지 못해 지도에는 표시하지 못했어요.</div>'; return; }
   salePin = { id, name, lat: g[0], lon: g[1], date: String(r.RCRIT_PBLANC_DE || '').slice(2, 7) }; renderExtraPins();
@@ -575,6 +593,10 @@ async function makeReport() {
     const codes = new Set(cand.map(c => c.code)); codes.add(code5);
     X.err = []; await ensureSilv(codes, 24);
     const rows = cand.map(mk), radTxt = radUsed >= 1000 ? radUsed / 1000 + 'km' : radUsed + 'm', radAsk = S.rad >= 1000 ? S.rad / 1000 + 'km' : S.rad + 'm';
+    const umdSet = new Set(cand.map(c => c.umd.split(' ').pop())), ym1 = String(cut1).slice(0, 6), unmG = new Map();
+    for (const u of UNM) { if (u.ym < ym1 || !codes.has(u.f) && ![...codes].some(c => (LEGACY[c] || []).includes(u.f))) continue; if (!umdSet.has(String(u.umd).split(' ').pop())) continue; const k = u.name + ' ' + u.jibun; unmG.set(k, (unmG.get(k) || 0) + 1); }
+    const unmN = [...unmG.values()].reduce((a, x) => a + x, 0), unmEx = [...unmG.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, c]) => `${k}(${c}건)`).join(', ');
+    const noYear = rows.filter(r => !r.year).length;
     const tiers = [[rows.filter(r => r.year && Y - r.year <= 5), '준공 5년 이내'], [rows.filter(r => r.year && Y - r.year <= 10), '준공 10년 이내'], [rows, '전체 연차']];
     const hit = tiers.find(t => t[0].length >= 3) || tiers.find(t => t[0].length) || tiers[2];
     let pick = hit[0].slice(), tier = hit[1];
@@ -585,11 +607,11 @@ async function makeReport() {
     const cutN = pick.length > 30 ? pick.length - 30 : 0; if (cutN) pick = pick.slice(0, 30);
     // 주변 분양 (청약홈): 최근 2년, 반경 3km 이내 → 없으면 같은 시·군 가까운 순 3건
     status('기초자료 준비 중… 주변 분양 단지 확인');
-    let sales = [], saleNote = '', saleFar = false; const saleR = Math.max(radUsed, 3000), saleRTxt = saleR / 1000 + 'km';
+    let sales = [], saleNote = '', saleFar = false; const noGeo = []; const saleR = Math.max(radUsed, 3000), saleRTxt = saleR / 1000 + 'km';
     try { const sido = SIDO_OF[code5.slice(0, 2)], from = String(cut2).replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'), city = d2.split(' ')[0];
       const rowsS = (await salesOf(sido)).filter(r0 => String(r0.RCRIT_PBLANC_DE || '') >= from && String(r0.HSSPLY_ADRES || '').includes(city));
       let k = 0; const geo = [];
-      await Promise.all(Array.from({ length: 4 }, async () => { while (k < rowsS.length) { const r0 = rowsS[k++]; const p = await geocodeLoose(r0.HSSPLY_ADRES); if (p) geo.push({ r0, lat: p[0], lon: p[1], d: hav(S.center.lat, S.center.lon, p[0], p[1]) }); } }));
+      await Promise.all(Array.from({ length: 4 }, async () => { while (k < rowsS.length) { const r0 = rowsS[k++]; const p = await geocodeSale(r0.HSSPLY_ADRES, r0.HOUSE_NM); if (p) geo.push({ r0, lat: p[0], lon: p[1], approx: p[2], d: hav(S.center.lat, S.center.lon, p[0], p[1]) }); else noGeo.push(r0); } }));
       geo.sort((a, b) => a.d - b.d); sales = geo.filter(x => x.d <= saleR);
       if (!sales.length && geo.length) { sales = geo.slice(0, 3); saleFar = true; }
       if (!rowsS.length) saleNote = ST.log && !SALES.has(sido) ? '청약홈 서버가 자료를 주지 않아 분양 사례를 넣지 못했습니다.' : '최근 2년 내 청약홈 공고가 없습니다.';
@@ -721,11 +743,12 @@ async function makeReport() {
           const sup = [...ty.values()].reduce((a, z) => a + z, 0); if (sup > 0) cr = (req / sup).toFixed(2) + ' : 1'; }
       } catch (e) {}
       const ym = parseInt(String(r0.MVN_PREARNGE_YM || '').replace(/\D/g, '').slice(0, 6), 10) || 0;
-      saleRows.push([cell(String.fromCharCode(65 + saleRows.length), { bold: true, color: 'E8710A' }), cell(r0.RCRIT_PBLANC_DE || '-'), cell(r0.HOUSE_NM || '', { align: 'left', bold: true }), cell(String(r0.HSSPLY_ADRES || '').replace(/^\S+(특별시|광역시|도)\s*/, '').replace(/\(.*?\)/g, '').trim(), { align: 'left' }), cell(dTxt(x.d)), cell(n(+r0.TOT_SUPLY_HSHLDCO)), cell(r0.MVN_PREARNGE_YM || '-'), cell(ym ? (ym >= ymNow ? '입주 전' : '입주 후') : '-', ym >= ymNow ? { bold: true, color: 'E8710A' } : {}), cell(top), cell(pp, { bold: true, color: NAVY }), cell(cr)]); }
+      saleRows.push([cell(String.fromCharCode(65 + saleRows.length), { bold: true, color: 'E8710A' }), cell(r0.RCRIT_PBLANC_DE || '-'), cell(r0.HOUSE_NM || '', { align: 'left', bold: true }), cell(String(r0.HSSPLY_ADRES || '').replace(/^\S+(특별시|광역시|도)\s*/, '').replace(/\(.*?\)/g, '').trim(), { align: 'left' }), cell((x.approx ? '~' : '') + dTxt(x.d)), cell(n(+r0.TOT_SUPLY_HSHLDCO)), cell(r0.MVN_PREARNGE_YM || '-'), cell(ym ? (ym >= ymNow ? '입주 전' : '입주 후') : '-', ym >= ymNow ? { bold: true, color: 'E8710A' } : {}), cell(top), cell(pp, { bold: true, color: NAVY }), cell(cr)]); }
     sl = page(`반경 ${saleFar ? '밖 ' : saleRTxt + ' 내 '}최근 2년 분양 ${sales.length}건${sales.some(x => { const m = parseInt(String(x.r0.MVN_PREARNGE_YM || '').slice(0, 6), 10) || 0; return m >= ymNow; }) ? ` (입주 전 ${sales.filter(x => (parseInt(String(x.r0.MVN_PREARNGE_YM || '').slice(0, 6), 10) || 0) >= ymNow).length}건)` : ''} · 반경 ${radTxt} 분양권·입주권 거래 ${sv.reduce((a, g) => a + g.tr.length, 0)}건`, 'NEW SUPPLY & PRE-SALE RIGHTS');
     sl.addText(`주변 분양 사례 (청약홈 · 위치도의 알파벳 · ${saleFar ? '반경 ' + saleRTxt + ' 안에는 없어 같은 시·군 가까운 순 ' + sales.length + '건' : '반경 ' + saleRTxt + ' 이내 가까운 순'} · 분양가·평당가는 대표 주택형 최고가, 청약홈 공급면적 기준, 만원)`, { x: LX, y: 1.4, w: LW, h: 0.26, fontFace: F, fontSize: 10.5, bold: true, color: INK, margin: 0, isTextBox: true });
     let y = 1.7;
-    if (saleRows.length) { tbl(sl, [['', '모집공고일', '단지명', '공급위치', '거리', '세대', '입주예정', '상태', '대표 주택형 분양가', '평당가', '1순위 경쟁률'].map(TH)].concat(saleRows), LX, y, LW, [0.4, 0.95, 2.1, 2.3, 0.65, 0.6, 0.8, 0.7, 1.6, 0.85, 1.28], 8.5, 0.28); y += 0.28 * (saleRows.length + 1) + 0.3; }
+    if (saleRows.length) { tbl(sl, [['', '모집공고일', '단지명', '공급위치', '거리', '세대', '입주예정', '상태', '대표 주택형 분양가', '평당가', '1순위 경쟁률'].map(TH)].concat(saleRows), LX, y, LW, [0.4, 0.95, 2.1, 2.3, 0.65, 0.6, 0.8, 0.7, 1.6, 0.85, 1.28], 8.5, 0.28); y += 0.28 * (saleRows.length + 1) + 0.3;
+      const nt = [sales.some(x => x.approx) ? '~ 표시는 지구·동 중심 기준의 개략 거리' : '', noGeo.length ? `위치를 찾지 못해 제외한 분양 공고 ${noGeo.length}건` : ''].filter(Boolean).join(' · '); if (nt) sl.addText(nt, { x: LX, y: y - 0.3, w: LW, h: 0.2, fontFace: F, fontSize: 8, color: WARN, margin: 0, isTextBox: true }); }
     else { sl.addText(saleNote || '조건에 맞는 분양 단지가 없습니다.', { x: LX, y, w: LW, h: 0.28, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true }); y += 0.55; }
     sl.addText('분양권·입주권 실거래 (최근 2년, 만원)', { x: LX, y, w: LW, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true }); y += 0.3;
     if (sv.length) { const maxR = Math.max(1, Math.min(8, Math.floor((6.6 - y) / 0.28) - 1));
@@ -736,14 +759,17 @@ async function makeReport() {
     // 기준과 한계
     sl = page('이 자료의 기준과 한계', 'METHODOLOGY');
     sl.addText([`조사 범위는 대상지 반경 ${radTxt} 안의 아파트 ${cand.length}개 단지입니다. 선택 반경 ${radAsk}에서 시작해 준공 5년 이내 단지가 3개 이상 잡힐 때까지 최대 3km로 넓혔고, 준공 5년 이내 → 10년 이내 → 전체 순으로 3개 이상인 첫 구간만 넣었습니다 (이번 자료: ${tier}, ${pick.length}개${cutN ? `, 가까운 30개만 사용` : ''}).`,
-      `주변 분양은 청약홈 최근 2년 공고 중 반경 ${saleRTxt} 이내(없으면 같은 시·군 가까운 순 3건)를 넣었습니다. 분양 단지 위치는 공급위치 주소를 지도 좌표로 바꾼 값이라 실제와 다소 다를 수 있고, '입주 전'은 입주예정월이 기준월 이후인 단지입니다.`,
+      `주변 분양은 청약홈 최근 2년 공고 중 반경 ${saleRTxt} 이내(없으면 같은 시·군 가까운 순 3건)를 넣었습니다. 분양 단지 위치는 공급위치 주소(없으면 단지명·지구명·동)를 지도 좌표로 바꾼 값이라 실제와 다소 다를 수 있고(~ 표시는 개략 위치),${noGeo.length ? ` 위치를 찾지 못한 ${noGeo.length}건은 제외했으며,` : ''} '입주 전'은 입주예정월이 기준월 이후인 단지입니다.`,
+      unmN ? `단지 목록(K-apt 기준)에 없어 매칭하지 못해 빠진 최근 1년 거래 ${unmN}건이 있습니다 (반경 내 동 기준, 소규모·도시형·최근 입주 단지 등): ${unmEx}` : '',
+      noYear && tier !== '전체 연차' ? `준공연도를 확인하지 못한 ${noYear}개 단지는 연차 구간 선정에서 제외됐습니다.` : '',
       '실거래는 국토교통부 신고 자료이며 해제된 거래는 뺐습니다. 최근 두 달은 신고 기한(계약 후 30일) 때문에 건수가 더 늘 수 있습니다.',
       `평당가는 공급면적 기준입니다. 실거래 자료에는 전용면적만 있어, 기존 단지는 K-apt의 단지 평균 공급/전용 비율을 곱했고(같은 단지 안에서도 타입별로 2~3% 차이가 날 수 있음), 비율이 없는 ${estN}개 단지는 1.32로 추정했습니다. 분양 사례는 청약홈의 주택형별 공급면적을 썼습니다.`,
       noTr.length ? `최근 2년 거래가 없어 상세에서 뺀 단지: ${noTr.slice(0, 15).map(r => r.c.name).join(', ')}${noTr.length > 15 ? ' 외' : ''}` : '',
       det.length > 20 ? `단지별 상세는 20개까지만 넣었습니다 (전체 ${det.length}개는 요약표 참조).` : '',
+      '분양 자료는 청약홈 아파트 분양공고 기준이며, 오피스텔·도시형생활주택과 무순위·임의공급 별도 공고는 포함하지 않았습니다. 분양권 거래는 국토부 신고 자료입니다.',
       '분양 사례의 분양가는 주택형별 최고가입니다. 층별 분양가, 발코니 확장비, 중도금 조건은 모집공고문 분석이 필요합니다.',
       '인구·세대, 미분양, 인허가 등 통계와 적정 분양가 검토는 이 자료에 없습니다.'].filter(Boolean).map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
-      { x: LX, y: 1.5, w: LW, h: 5.2, fontFace: F, fontSize: 12, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 10, isTextBox: true });
+      { x: LX, y: 1.4, w: LW, h: 5.55, fontFace: F, fontSize: 11, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 7, isTextBox: true, fit: 'shrink' });
 
     await pres.writeFile({ fileName: `시장조사 기초자료_${d2.replace(/\s/g, '')}_${d3}_${today.replace(/\./g, '')}.pptx` });
     status(`기초자료 PPT를 만들었어요. (반경 ${radTxt} ${pick.length}개 단지, ${tier}${tierNote}, 주변 분양 ${sales.length}건)`);
