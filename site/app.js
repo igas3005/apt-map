@@ -232,8 +232,8 @@ function infoLine(c) {
   if (b && b[2]) parts.push((b[3] ? `지하${b[3]}/` : '') + `지상${b[2]}층`);
   return parts.length ? parts.join(' · ') + src : '';
 }
-function dominant(arr) {            // 거래가 가장 많은 전용면적 타입
-  const g = new Map(); for (const t of arr) { const k = Math.round(t[1]); (g.get(k) || g.set(k, []).get(k)).push(t); }
+function dominant(arr, fl) {            // 거래가 가장 많은 전용면적 타입 (fl: 소수점 버림으로 묶음, 84.97㎡→84)
+  const g = new Map(); for (const t of arr) { const k = fl ? Math.floor(t[1] + 1e-6) : Math.round(t[1]); (g.get(k) || g.set(k, []).get(k)).push(t); }
   let best = null;
   for (const [k, v] of g) { const mx = Math.max(...v.map(t => t[0]));
     if (!best || v.length > best.v.length || (v.length === best.v.length && mx > best.mx)) best = { k, v, mx }; }
@@ -645,7 +645,9 @@ async function makeReport() {
     const pairs1 = pick.flatMap(r => r.all.filter(t => t[0] >= cut1).map(t => [r, t])), pairs0 = pick.flatMap(r => r.all.filter(t => t[0] < cut1).map(t => [r, t]));
     const mp1 = pairs1.length ? med(pairs1.map(([r, t]) => ppy(r, t))) : null, mp0 = pairs0.length ? med(pairs0.map(([r, t]) => ppy(r, t))) : null, chg = (mp1 && mp0) ? (mp1 / mp0 - 1) * 100 : null;
     const chgTxt = chg == null ? '비교 불가' : (chg >= 0 ? '+' : '') + chg.toFixed(1) + '%';
-    const sumOf = r => { if (!r.tr.length) return null; const b = dominant(r.tr), am = b.v.map(t => t[3]); return { type: b.k, cnt: r.tr.length, med: med(am), max: Math.max(...am), min: Math.min(...am), ppy: med(b.v.map(t => ppy(r, t))) }; };
+    const bk = t => Math.floor(t[1] + 1e-6);   // 전용면적은 소수점 버림 (84.97㎡→84, 59.98㎡→59)
+    const stOf = (r, k) => { const v = r.tr.filter(t => bk(t) === k); if (!v.length) return null; const am = v.map(t => t[3]); return { cnt: v.length, med: med(am), max: Math.max(...am), min: Math.min(...am), ppy: med(v.map(t => ppy(r, t))) }; };
+    const sumOf = r => { if (!r.tr.length) return null; const b = dominant(r.tr, true), am = b.v.map(t => t[3]); return { type: b.k, cnt: r.tr.length, med: med(am), max: Math.max(...am), min: Math.min(...am), ppy: med(b.v.map(t => ppy(r, t))) }; };
     const det = pick.filter(r => r.tr.length), noTr = pick.filter(r => !r.tr.length);
     const estN = det.filter(r => !r.ratio).length;
 
@@ -657,15 +659,18 @@ async function makeReport() {
     sl.addText(`대상지: ${S.center.label || area}\n조사 범위: 반경 ${radTxt} 아파트 ${cand.length}개 단지 중 ${pick.length}개 (${tier}${tierNote}) · 주변 분양 ${sales.length}건\n기준일: ${today}`, { x: 0.8, y: 4.6, w: 11.5, h: 1.0, fontFace: F, fontSize: 11.5, color: 'AEB9C7', margin: 0, isTextBox: true, valign: 'top', paraSpaceAfter: 4 });
 
     // 요약
-    sl = page(mp1 ? `반경 ${radTxt} ${tier} ${pick.length}개 단지, 최근 1년 중위 평당가 ${n(mp1)}만원 (직전 1년 대비 ${chgTxt})` : `반경 ${radTxt} ${tier} ${pick.length}개 단지, 최근 1년 실거래 없음`, 'EXECUTIVE SUMMARY');
+    const p84 = pairs1.filter(([r, t]) => bk(t) === 84), p59 = pairs1.filter(([r, t]) => bk(t) === 59), mA = a => a.length ? n(med(a.map(([r, t]) => t[3]))) : null, pA = a => a.length ? n(med(a.map(([r, t]) => ppy(r, t)))) : null;
+    const hp = [p84.length ? `84㎡ 중위 ${mA(p84)}만원(${p84.length}건)` : '', p59.length ? `59㎡ 중위 ${mA(p59)}만원(${p59.length}건)` : ''].filter(Boolean).join(', ');
+    sl = page(hp ? `반경 ${radTxt} ${tier} ${pick.length}개 단지, 최근 1년 ${hp}` : (mp1 ? `반경 ${radTxt} ${tier} ${pick.length}개 단지, 최근 1년 중위 평당가 ${n(mp1)}만원 (직전 1년 대비 ${chgTxt})` : `반경 ${radTxt} ${tier} ${pick.length}개 단지, 최근 1년 실거래 없음`), 'EXECUTIVE SUMMARY');
     const kw = 2.9, kg = 0.21;
     kpi(sl, LX, 1.4, kw, '대상 단지', `${pick.length}개`, `반경 ${radTxt} 내 ${cand.length}개 중 · ${tier}`);
-    kpi(sl, LX + (kw + kg), 1.4, kw, '최근 1년 거래', `${n(pairs1.length)}건`, `직전 1년 ${n(pairs0.length)}건`);
-    kpi(sl, LX + (kw + kg) * 2, 1.4, kw, '중위 평당가 (공급면적)', mp1 ? `${n(mp1)}만원` : '-', mp0 ? `직전 1년 ${n(mp0)}만원` : '직전 1년 거래 없음');
-    kpi(sl, LX + (kw + kg) * 3, 1.4, kw, '직전 1년 대비', chgTxt, '중위 평당가 기준');
-    const bars = det.map(r => ({ name: r.c.name.length > 14 ? r.c.name.slice(0, 14) + '…' : r.c.name, v: Math.round(sumOf(r).ppy) })).sort((a, b) => b.v - a.v).slice(0, 10).reverse();
-    sl.addText('단지별 평당가 (주력 면적타입 중위, 만원)', { x: LX, y: 2.8, w: 7.4, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
-    if (bars.length) sl.addChart(pres.ChartType.bar, [{ name: '평당가', labels: bars.map(b => b.name), values: bars.map(b => b.v) }], Object.assign(chartBase(), { x: LX, y: 3.08, w: 7.4, h: 3.85, barDir: 'bar', chartColors: [NAVY], showValue: true, dataLabelPosition: 'outEnd', barGapWidthPct: 55, valAxisMinVal: 0 }));
+    kpi(sl, LX + (kw + kg), 1.4, kw, '최근 1년 거래', `${n(pairs1.length)}건`, `직전 1년 ${n(pairs0.length)}건 · 평당가 ${chgTxt}`);
+    kpi(sl, LX + (kw + kg) * 2, 1.4, kw, '84㎡ 중위 실거래가', p84.length ? `${mA(p84)}만원` : '-', p84.length ? `최근 1년 ${p84.length}건 · 평당 ${pA(p84)}만원` : '최근 1년 84㎡ 거래 없음');
+    kpi(sl, LX + (kw + kg) * 3, 1.4, kw, '59㎡ 중위 실거래가', p59.length ? `${mA(p59)}만원` : '-', p59.length ? `최근 1년 ${p59.length}건 · 평당 ${pA(p59)}만원` : '최근 1년 59㎡ 거래 없음');
+    const kBar = det.some(r => stOf(r, 84)) ? 84 : (det.some(r => stOf(r, 59)) ? 59 : 0);
+    const bars = (kBar ? det.filter(r => stOf(r, kBar)).map(r => ({ name: r.c.name.length > 14 ? r.c.name.slice(0, 14) + '…' : r.c.name, v: Math.round(stOf(r, kBar).med) })) : det.map(r => ({ name: r.c.name.length > 14 ? r.c.name.slice(0, 14) + '…' : r.c.name, v: Math.round(sumOf(r).ppy) }))).sort((a, b) => b.v - a.v).slice(0, 10).reverse();
+    sl.addText(kBar ? `단지별 ${kBar}㎡ 중위 실거래가 (만원)` : '단지별 평당가 (주력 면적타입 중위, 만원)', { x: LX, y: 2.8, w: 7.4, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
+    if (bars.length) sl.addChart(pres.ChartType.bar, [{ name: kBar ? '중위 실거래가' : '평당가', labels: bars.map(b => b.name), values: bars.map(b => b.v) }], Object.assign(chartBase(), { x: LX, y: 3.08, w: 7.4, h: 3.85, barDir: 'bar', chartColors: [NAVY], showValue: true, dataLabelPosition: 'outEnd', barGapWidthPct: 55, valAxisMinVal: 0 }));
     else sl.addText('기간 내 거래가 없어 차트를 그리지 못했습니다.', { x: LX, y: 3.2, w: 7.4, h: 0.3, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true });
     sl.addText('조사 기준', { x: 8.3, y: 2.8, w: 4.4, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
     sl.addText([`범위: 대상지 반경 ${radTxt} 안 아파트 (선택 반경 ${radAsk}${radUsed > S.rad ? ', 비교 단지가 3개 미만이라 확대' : ''})`, `연차: 준공 5년 이내 우선(3개 이상), 아니면 10년 이내, 아니면 전체 → 이번 자료는 ${tier}${tierNote}`, '실거래: 단지별 최근 1년, 1년 내 거래가 없는 단지는 최근 2년', `평당가: 공급면적 기준. 단지별 공급/전용 비율은 K-apt 값을 쓰고, 없는 ${estN}개 단지는 전용 × 1.32로 추정`,
@@ -696,35 +701,42 @@ async function makeReport() {
     sl.addChart(pres.ChartType.bar, [{ name: '거래 건수', labels: byM.map(x => x.lab), values: byM.map(x => x.cnt) }], Object.assign(chartBase(), { x: 6.9, y: 1.7, w: 5.88, h: 5.1, barDir: 'col', chartColors: [NAVY], catAxisLabelFontSize: 7.5, barGapWidthPct: 40, valAxisMinVal: 0 }));
 
     // 단지 요약표
-    const sumHead = ['단지명', '거리', '준공', '세대수', '층수', '주력 전용', '거래 건수', '중위가', '최고가', '최저가', '평당가(중위)', '공급/전용', '기간'].map(TH), sumW = [2.4, 0.7, 0.6, 0.75, 0.9, 0.85, 0.75, 0.95, 0.95, 0.95, 1.0, 0.78, 0.65];
-    const sumRows = pick.map(r => { const m = sumOf(r);
-      return [cell(`${pick.indexOf(r) + 1}. ${r.c.name}`, { align: 'left', bold: true }), cell(dTxt(r.d)), cell(r.year || '-'), cell(r.hh ? n(r.hh) : '-'), cell(r.up ? (r.dn ? `B${r.dn}/` : '') + r.up + 'F' : '-'), cell(m ? m.type + '㎡' : '-'), cell(m ? m.cnt : 0), cell(m ? n(m.med) : '-'), cell(m ? n(m.max) : '-'), cell(m ? n(m.min) : '-'), cell(m ? n(m.ppy) : '-', { bold: true, color: NAVY }), cell(r.ratio ? r.ratio.toFixed(2) : '1.32*', r.ratio ? {} : { color: WARN }), cell(m ? r.span + '년' : '-')]; });
+    const sumHead = ['단지명', '거리', '준공', '세대수', '층수', '84㎡ 건수', '84㎡ 중위가', '84㎡ 평당가', '59㎡ 건수', '59㎡ 중위가', '59㎡ 평당가', '공급/전용', '기간'].map(TH), sumW = [2.4, 0.7, 0.6, 0.75, 0.9, 0.7, 0.95, 0.95, 0.7, 0.95, 0.95, 0.9, 0.78];
+    const sumRows = pick.map(r => { const a84 = stOf(r, 84), a59 = stOf(r, 59);
+      return [cell(`${pick.indexOf(r) + 1}. ${r.c.name}`, { align: 'left', bold: true }), cell(dTxt(r.d)), cell(r.year || '-'), cell(r.hh ? n(r.hh) : '-'), cell(r.up ? (r.dn ? `B${r.dn}/` : '') + r.up + 'F' : '-'),
+        cell(a84 ? a84.cnt : '-'), cell(a84 ? n(a84.med) : '-', { bold: true, color: NAVY }), cell(a84 ? n(a84.ppy) : '-'), cell(a59 ? a59.cnt : '-'), cell(a59 ? n(a59.med) : '-', { bold: true, color: NAVY }), cell(a59 ? n(a59.ppy) : '-'),
+        cell(r.ratio ? r.ratio.toFixed(2) : '1.32*', r.ratio ? {} : { color: WARN }), cell(r.tr.length ? r.span + '년' : '-')]; });
     for (let i = 0; i < Math.max(sumRows.length, 1); i += 16) {
-      sl = page(`대상 ${pick.length}개 단지 요약: 평당가 ${det.length ? (Math.round(Math.min(...det.map(r => sumOf(r).ppy))) === Math.round(Math.max(...det.map(r => sumOf(r).ppy))) ? n(sumOf(det[0]).ppy) : n(Math.min(...det.map(r => sumOf(r).ppy))) + '~' + n(Math.max(...det.map(r => sumOf(r).ppy)))) + '만원' : '거래 없음'}${i ? ' (계속)' : ''}`, 'COMPARABLE SET');
+      const m84 = det.map(r => stOf(r, 84)).filter(Boolean).map(x => x.med), rg = v => !v.length ? '' : (Math.round(Math.min(...v)) === Math.round(Math.max(...v)) ? n(v[0]) : n(Math.min(...v)) + '~' + n(Math.max(...v)));
+      sl = page(`대상 ${pick.length}개 단지 요약: ${m84.length ? '84㎡ 중위 실거래가 ' + rg(m84) + '만원' : (det.length ? '평당가 ' + rg(det.map(r => sumOf(r).ppy)) + '만원' : '거래 없음')}${i ? ' (계속)' : ''}`, 'COMPARABLE SET');
       tbl(sl, [sumHead].concat(sumRows.slice(i, i + 16)), LX, 1.4, LW, sumW, 9, 0.3);
-      sl.addText('단위: 만원 · 주력 면적타입(거래가 가장 많은 전용면적) 기준 · 공급/전용 비율은 K-apt 단지 평균, *는 1.32 추정 · 세대수·층수는 K-apt 또는 건축물대장', { x: LX, y: 6.72, w: LW, h: 0.22, fontFace: F, fontSize: 8, color: MUTE, margin: 0, isTextBox: true });
+      sl.addText('단위: 만원 · 전용면적은 소수점 버림(84.97㎡→84㎡, 59.98㎡→59㎡) · 평당가는 공급면적 기준(공급/전용은 K-apt 단지 평균, *는 1.32 추정) · 세대수·층수는 K-apt 또는 건축물대장', { x: LX, y: 6.72, w: LW, h: 0.22, fontFace: F, fontSize: 8, color: MUTE, margin: 0, isTextBox: true });
     }
 
     // 단지별: 한 쪽에 한 단지 (왼쪽 표, 오른쪽 월별 추이)
     for (const r of det.slice(0, 20)) { const c = r.c, m = sumOf(r);
-      sl = page(`${c.name}: 전용 ${m.type}㎡ 중위 ${n(m.med)}만원, 평당 ${n(m.ppy)}만원`, 'COMPLEX PROFILE');
+      const d84 = stOf(r, 84), d59 = stOf(r, 59);
+      sl = page(d84 || d59 ? `${c.name}: ${[d84 ? `84㎡ 중위 ${n(d84.med)}만원(평당 ${n(d84.ppy)})` : '', d59 ? `59㎡ 중위 ${n(d59.med)}만원(평당 ${n(d59.ppy)})` : ''].filter(Boolean).join(', ')}` : `${c.name}: 전용 ${m.type}㎡ 중위 ${n(m.med)}만원, 평당 ${n(m.ppy)}만원`, 'COMPLEX PROFILE');
       sl.addText([r.year ? `${r.year}년 준공` : '준공연도 미확인', r.hh ? n(r.hh) + '세대' : '', r.up ? (r.dn ? `지하${r.dn}/` : '') + `지상${r.up}층` : '', `${c.umd} ${c.jibun}`, `대상지에서 ${r.d < 1000 ? Math.round(r.d) + 'm' : (r.d / 1000).toFixed(1) + 'km'}`, `최근 ${r.span}년 거래 ${r.tr.length}건`, r.ratio ? `공급/전용 ${r.ratio.toFixed(2)} (K-apt)` : '공급/전용 1.32 (추정)'].filter(Boolean).join('  ·  '),
         { x: LX, y: 1.3, w: LW, h: 0.26, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true });
-      const g = new Map(); for (const t of r.tr) { const kk = Math.round(t[1]); (g.get(kk) || g.set(kk, []).get(kk)).push(t); }
-      const types = [...g.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 5).sort((a, b) => a[0] - b[0]);
-      sl.addText(`면적타입별 요약 (최근 ${r.span}년, 만원)`, { x: LX, y: 1.75, w: 7, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
+      const g = new Map(); for (const t of r.tr) { const kk = bk(t); (g.get(kk) || g.set(kk, []).get(kk)).push(t); }
+      const pri = kk => kk === 84 ? 0 : kk === 59 ? 1 : 2;
+      const types = [...g.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 5).sort((a, b) => pri(a[0]) - pri(b[0]) || a[0] - b[0]);
+      sl.addText(`면적타입별 요약 (최근 ${r.span}년, 만원 · 84㎡ → 59㎡ 순)`, { x: LX, y: 1.75, w: 7, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
       const st = [['전용', '공급(평)', '건수', '최고가', '최저가', '중위가', '평균가', '평당가'].map(TH)].concat(types.map(([kk, v]) => { const am = v.map(t => t[3]);
         return [cell(kk + '㎡'), cell(pyR(r, kk) + '평'), cell(v.length), cell(n(Math.max(...am))), cell(n(Math.min(...am))), cell(n(med(am)), { bold: true, color: NAVY }), cell(n(mean(am))), cell(n(med(v.map(t => ppy(r, t)))), { bold: true })]; }));
       tbl(sl, st, LX, 2.05, 7.0, [0.8, 0.85, 0.6, 0.95, 0.95, 0.95, 0.95, 0.95], 9, 0.29);
       const y1 = 2.05 + 0.29 * st.length + 0.28;
-      sl.addText('최근 거래 5건', { x: LX, y: y1, w: 7, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
-      const rc = [['계약일', '전용 (공급 평)', '층', '거래가(만원)', '평당가(만원)'].map(TH)].concat(r.tr.slice().sort((a, b) => b[0] - a[0]).slice(0, 5).map(t => [cell(ds(t[0])), cell(`${t[1]}㎡ (${pyR(r, t[1])}평)`), cell(t[2]), cell(n(t[3]), { bold: true }), cell(n(ppy(r, t)))]));
-      tbl(sl, rc, LX, y1 + 0.3, 7.0, [1.2, 2.0, 0.8, 1.6, 1.4], 9, 0.29);
+      const tA = g.has(84) ? 84 : (types[0] ? types[0][0] : null), tB = g.has(59) && tA !== 59 ? 59 : ((types.find(x => x[0] !== tA) || [null])[0]);
+      const recent = k => { const v = (g.get(k) || []).slice().sort((a, b) => b[0] - a[0]); return [['계약일', '전용 (공급 평)', '층', '거래가(만원)', '평당가(만원)'].map(TH)].concat(v.slice(0, 5).map(t => [cell(ds(t[0])), cell(`${t[1]}㎡ (${pyR(r, t[1])}평)`), cell(t[2]), cell(n(t[3]), { bold: true }), cell(n(ppy(r, t)))])); };
+      sl.addText(`${tA}㎡ 최근 실거래 5건 (최근 ${r.span}년 ${(g.get(tA) || []).length}건 중)`, { x: LX, y: y1, w: 7, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
+      tbl(sl, recent(tA), LX, y1 + 0.3, 7.0, [1.2, 2.0, 0.8, 1.6, 1.4], 9, 0.29);
       const cm = ms.map(mm => { const v = r.all.filter(t => Math.floor(t[0] / 100) === mm); return v.length ? { lab: String(mm).slice(2, 4) + '.' + String(mm).slice(4), p: Math.round(med(v.map(t => ppy(r, t)))) } : null; }).filter(Boolean);
       sl.addText('월별 중위 평당가 (최근 2년, 만원)', { x: 7.9, y: 1.75, w: 4.9, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
-      if (cm.length > 1) sl.addChart(pres.ChartType.line, [{ name: '중위 평당가', labels: cm.map(x => x.lab), values: cm.map(x => x.p) }], Object.assign(chartBase(), { x: 7.9, y: 2.05, w: 4.88, h: 4.75, chartColors: [ACC], lineSize: 2.25, lineDataSymbolSize: 6, catAxisLabelFontSize: 8 }));
+      if (cm.length > 1) sl.addChart(pres.ChartType.line, [{ name: '중위 평당가', labels: cm.map(x => x.lab), values: cm.map(x => x.p) }], Object.assign(chartBase(), { x: 7.9, y: 2.05, w: 4.88, h: tB ? 2.25 : 4.75, chartColors: [ACC], lineSize: 2.25, lineDataSymbolSize: 6, catAxisLabelFontSize: 8 }));
       else sl.addText('추이를 그릴 만큼 거래가 없습니다.', { x: 7.9, y: 2.15, w: 4.8, h: 0.3, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true });
-    }
+      if (tB) { sl.addText(`${tB}㎡ 최근 실거래 5건 (${(g.get(tB) || []).length}건 중)`, { x: 7.9, y: 4.42, w: 4.88, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
+        tbl(sl, recent(tB).map((rw, i) => i ? [rw[0], cell(`${rw[1].text.split(' ')[0]}`), rw[2], rw[3], rw[4]] : rw), 7.9, 4.72, 4.88, [0.95, 1.0, 0.5, 1.2, 1.23], 8.5, 0.29); } }
 
     // 주변 분양 + 분양권·입주권 실거래
     const sv = [], gus = new Map(); for (const c of cand) gus.set(c.code, c.gu); gus.set(code5, d2);
@@ -737,22 +749,22 @@ async function makeReport() {
     const ymNow = S.asOf.getFullYear() * 100 + S.asOf.getMonth() + 1, saleRows = [];
     for (const x of sales) { const r0 = x.r0; let top = '-', pp = '-', cr = '-';
       try { const [mdl, cmp] = (await (saleExtra(String(r0.HOUSE_MANAGE_NO)), SALEX.get(String(r0.HOUSE_MANAGE_NO))));
-        if (Array.isArray(mdl) && mdl.length && mdl[0].LTTOT_TOP_AMOUNT !== undefined) { const m0 = mdl.slice().sort((a, b) => (+b.SUPLY_HSHLDCO || 0) - (+a.SUPLY_HSHLDCO || 0))[0], amt = +String(m0.LTTOT_TOP_AMOUNT).replace(/,/g, ''), su = parseFloat(m0.SUPLY_AR);
-          if (amt) { const ty = String(m0.HOUSE_TY || ''), tn = parseFloat(ty); top = `${isNaN(tn) ? ty : Math.round(tn) + ty.replace(/^[\d.]+/, '') + '㎡'} · ${n(amt)}`; if (su > 0) pp = n(amt / (su / PY)); } }
+        if (Array.isArray(mdl) && mdl.length && mdl[0].LTTOT_TOP_AMOUNT !== undefined) { const byS = (a, b) => (+b.SUPLY_HSHLDCO || 0) - (+a.SUPLY_HSHLDCO || 0), m84 = mdl.filter(z => Math.floor(parseFloat(z.HOUSE_TY) + 1e-6) === 84).sort(byS)[0], m0 = m84 || mdl.slice().sort(byS)[0], amt = +String(m0.LTTOT_TOP_AMOUNT).replace(/,/g, ''), su = parseFloat(m0.SUPLY_AR);
+          if (amt) { const ty = String(m0.HOUSE_TY || ''), tn = parseFloat(ty); top = `${isNaN(tn) ? ty : Math.floor(tn + 1e-6) + ty.replace(/^[\d.]+/, '') + '㎡'} · ${n(amt)}`; if (su > 0) pp = n(amt / (su / PY)); } }
         if (Array.isArray(cmp) && cmp.length && cmp[0].REQ_CNT !== undefined) { const c1 = cmp.filter(z => String(z.SUBSCRPT_RANK_CODE) === '1'), req = c1.reduce((a, z) => a + (+String(z.REQ_CNT).replace(/,/g, '') || 0), 0), ty = new Map(); for (const z of c1) ty.set(z.HOUSE_TY, +z.SUPLY_HSHLDCO || 0);
           const sup = [...ty.values()].reduce((a, z) => a + z, 0); if (sup > 0) cr = (req / sup).toFixed(2) + ' : 1'; }
       } catch (e) {}
       const ym = parseInt(String(r0.MVN_PREARNGE_YM || '').replace(/\D/g, '').slice(0, 6), 10) || 0;
       saleRows.push([cell(String.fromCharCode(65 + saleRows.length), { bold: true, color: 'E8710A' }), cell(r0.RCRIT_PBLANC_DE || '-'), cell(r0.HOUSE_NM || '', { align: 'left', bold: true }), cell(String(r0.HSSPLY_ADRES || '').replace(/^\S+(특별시|광역시|도)\s*/, '').replace(/\(.*?\)/g, '').trim(), { align: 'left' }), cell((x.approx ? '~' : '') + dTxt(x.d)), cell(n(+r0.TOT_SUPLY_HSHLDCO)), cell(r0.MVN_PREARNGE_YM || '-'), cell(ym ? (ym >= ymNow ? '입주 전' : '입주 후') : '-', ym >= ymNow ? { bold: true, color: 'E8710A' } : {}), cell(top), cell(pp, { bold: true, color: NAVY }), cell(cr)]); }
     sl = page(`반경 ${saleFar ? '밖 ' : saleRTxt + ' 내 '}최근 2년 분양 ${sales.length}건${sales.some(x => { const m = parseInt(String(x.r0.MVN_PREARNGE_YM || '').slice(0, 6), 10) || 0; return m >= ymNow; }) ? ` (입주 전 ${sales.filter(x => (parseInt(String(x.r0.MVN_PREARNGE_YM || '').slice(0, 6), 10) || 0) >= ymNow).length}건)` : ''} · 반경 ${radTxt} 분양권·입주권 거래 ${sv.reduce((a, g) => a + g.tr.length, 0)}건`, 'NEW SUPPLY & PRE-SALE RIGHTS');
-    sl.addText(`주변 분양 사례 (청약홈 · 위치도의 알파벳 · ${saleFar ? '반경 ' + saleRTxt + ' 안에는 없어 같은 시·군 가까운 순 ' + sales.length + '건' : '반경 ' + saleRTxt + ' 이내 가까운 순'} · 분양가·평당가는 대표 주택형 최고가, 청약홈 공급면적 기준, 만원)`, { x: LX, y: 1.4, w: LW, h: 0.26, fontFace: F, fontSize: 10.5, bold: true, color: INK, margin: 0, isTextBox: true });
+    sl.addText(`주변 분양 사례 (청약홈 · 위치도의 알파벳 · ${saleFar ? '반경 ' + saleRTxt + ' 안에는 없어 같은 시·군 가까운 순 ' + sales.length + '건' : '반경 ' + saleRTxt + ' 이내 가까운 순'} · 분양가·평당가는 84㎡ 주택형 최고가(없으면 공급세대가 가장 많은 주택형), 청약홈 공급면적 기준, 만원)`, { x: LX, y: 1.4, w: LW, h: 0.26, fontFace: F, fontSize: 10.5, bold: true, color: INK, margin: 0, isTextBox: true });
     let y = 1.7;
-    if (saleRows.length) { tbl(sl, [['', '모집공고일', '단지명', '공급위치', '거리', '세대', '입주예정', '상태', '대표 주택형 분양가', '평당가', '1순위 경쟁률'].map(TH)].concat(saleRows), LX, y, LW, [0.4, 0.95, 2.1, 2.3, 0.65, 0.6, 0.8, 0.7, 1.6, 0.85, 1.28], 8.5, 0.28); y += 0.28 * (saleRows.length + 1) + 0.3;
+    if (saleRows.length) { tbl(sl, [['', '모집공고일', '단지명', '공급위치', '거리', '세대', '입주예정', '상태', '분양가 (84㎡ 우선)', '평당가', '1순위 경쟁률'].map(TH)].concat(saleRows), LX, y, LW, [0.4, 0.95, 2.1, 2.3, 0.65, 0.6, 0.8, 0.7, 1.6, 0.85, 1.28], 8.5, 0.28); y += 0.28 * (saleRows.length + 1) + 0.3;
       const nt = [sales.some(x => x.approx) ? '~ 표시는 지구·동 중심 기준의 개략 거리' : '', noGeo.length ? `위치를 찾지 못해 제외한 분양 공고 ${noGeo.length}건` : ''].filter(Boolean).join(' · '); if (nt) sl.addText(nt, { x: LX, y: y - 0.3, w: LW, h: 0.2, fontFace: F, fontSize: 8, color: WARN, margin: 0, isTextBox: true }); }
     else { sl.addText(saleNote || '조건에 맞는 분양 단지가 없습니다.', { x: LX, y, w: LW, h: 0.28, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true }); y += 0.55; }
     sl.addText('분양권·입주권 실거래 (최근 2년, 만원)', { x: LX, y, w: LW, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true }); y += 0.3;
     if (sv.length) { const maxR = Math.max(1, Math.min(8, Math.floor((6.6 - y) / 0.28) - 1));
-      tbl(sl, [['단지명', '소재지', '거리', '건수', '주력 전용', '중위가', '최고가', '최저가', '최근 거래'].map(TH)].concat(sv.sort((a, b) => b.tr.length - a.tr.length).slice(0, maxR).map(g => { const b = dominant(g.tr), am = b.v.map(t => t[3]);
+      tbl(sl, [['단지명', '소재지', '거리', '건수', '주력 전용', '중위가', '최고가', '최저가', '최근 거래'].map(TH)].concat(sv.sort((a, b) => b.tr.length - a.tr.length).slice(0, maxR).map(g => { const b = dominant(g.tr, true), am = b.v.map(t => t[3]);
         return [cell(g.name, { align: 'left', bold: true }), cell(g.addr, { align: 'left' }), cell(dTxt(g.d)), cell(g.tr.length), cell(b.k + '㎡'), cell(n(med(am)), { bold: true, color: NAVY }), cell(n(Math.max(...am))), cell(n(Math.min(...am))), cell(ds(Math.max(...g.tr.map(t => t[0]))))]; })), LX, y, LW, [3.0, 2.4, 0.7, 0.7, 1.0, 1.1, 1.1, 1.1, 1.13], 8.5, 0.28);
     } else sl.addText(X.err.length ? '분양권 자료를 조회하지 못했습니다: ' + X.err.join(' / ') : `반경 ${radTxt} 안 최근 2년 분양권·입주권 거래가 없습니다.`, { x: LX, y, w: LW, h: 0.28, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true });
 
@@ -767,7 +779,7 @@ async function makeReport() {
       noTr.length ? `최근 2년 거래가 없어 상세에서 뺀 단지: ${noTr.slice(0, 15).map(r => r.c.name).join(', ')}${noTr.length > 15 ? ' 외' : ''}` : '',
       det.length > 20 ? `단지별 상세는 20개까지만 넣었습니다 (전체 ${det.length}개는 요약표 참조).` : '',
       '분양 자료는 청약홈 아파트 분양공고 기준이며, 오피스텔·도시형생활주택과 무순위·임의공급 별도 공고는 포함하지 않았습니다. 분양권 거래는 국토부 신고 자료입니다.',
-      '분양 사례의 분양가는 주택형별 최고가입니다. 층별 분양가, 발코니 확장비, 중도금 조건은 모집공고문 분석이 필요합니다.',
+      '분양 사례의 분양가는 84㎡ 주택형(없으면 공급세대가 가장 많은 주택형)의 최고 분양가입니다. 층별 분양가, 발코니 확장비, 중도금 조건은 모집공고문 분석이 필요합니다.',
       '인구·세대, 미분양, 인허가 등 통계와 적정 분양가 검토는 이 자료에 없습니다.'].filter(Boolean).map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
       { x: LX, y: 1.4, w: LW, h: 5.55, fontFace: F, fontSize: 11, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 7, isTextBox: true, fit: 'shrink' });
 
