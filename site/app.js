@@ -827,7 +827,7 @@ async function makeReport() {
         'NEW VS OLD · PRESALE PREMIUM');
       const kg2 = 0.21, kw2 = (LW - kg2 * 2) / 3;
       gap.forEach((z, i) => { kpi(sl, LX + (kw2 + kg2) * i, 1.4, kw2, `${z.k}㎡ 신축 / 구축 중위 실거래가`, z.ok ? `${n(z.a.m)} / ${n(z.b.m)}만원` : '표본 부족',
-        z.ok ? `신축 ${z.a.n}건·${z.a.cx}개 단지 / 구축 ${z.b.n}건·${z.b.cx}개 단지 · 평당가 ${z.xp.toFixed(2)}배` : `신축 ${z.a.n}건 / 구축 ${z.b.n}건 (각 3건 이상 필요)`); });
+        z.ok ? `신축 ${z.a.n}건·${z.a.cx}개 단지 / 구축 ${z.b.n}건·${z.b.cx}개 단지 · 평당가 ${z.xp.toFixed(2)}배${z.a.cx < 3 ? ' · 신축 단지 적음(참고용)' : ''}` : `신축 ${z.a.n}건 / 구축 ${z.b.n}건 (각 3건 이상 필요)`); });
       { const pm = pv.length ? med(pv.map(z => z.pr)) : null; kpi(sl, LX + (kw2 + kg2) * 2, 1.4, kw2, '분양권 전매 프리미엄 중위', pm == null ? '-' : `${pm >= 0 ? '+' : ''}${n(pm)}만원`, pv.length ? `분양 ${prem.length}건 중 ${pv.length}건에서 전매 확인` : '전매 거래가 확인된 분양 단지 없음'); }
       sl.addText(`분양가 대비 분양권 전매가 (분양 사례의 ${prem[0] && prem[0].ty ? '대표 주택형' : '주택형'} 최고 분양가 대비 · 만원)`, { x: LX, y: 2.75, w: LW, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
       if (prem.length) { const rr = prem.map((z, i) => [cell(String.fromCharCode(65 + i), { bold: true, color: 'E8710A' }), cell(z.r0.HOUSE_NM || '', { align: 'left', bold: true }), cell(z.r0.RCRIT_PBLANC_DE || '-'), cell(z.r0.MVN_PREARNGE_YM || '-'), cell(z.ty ? z.ty + '㎡' : '-'), cell(z.amt ? n(z.amt) : '-'), cell(z.v.length ? z.v.length : (z.g ? '0' : '-')),
@@ -835,7 +835,7 @@ async function makeReport() {
         cell(z.v.length ? '' : (z.g ? '같은 타입 거래 없음' : '전매 거래 없음/미확인'), { align: 'left' })]);
         tbl(sl, [['', '단지명', '모집공고일', '입주예정', '타입', '최고 분양가', '전매 건수', '전매 중위가', '프리미엄', '%', '최근 전매', '비고'].map(TH)].concat(rr.slice(0, 9)), LX, 3.05, LW, [0.4, 2.45, 0.95, 0.85, 0.65, 1.05, 0.75, 1.05, 0.95, 0.7, 0.85, 1.12], 8.5, 0.3); }
       else sl.addText(saleNote || '비교할 분양 사례가 없습니다.', { x: LX, y: 3.1, w: LW, h: 0.28, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true });
-      sl.addText(['보는 법: 프리미엄 = 같은 전용면적대 분양권 전매 중위가 − 청약홈 최고 분양가. 최고가는 고층 기준이라 실제 분양가보다 높아, 프리미엄은 실제보다 작게 나올 수 있습니다. 발코니 확장·옵션 비용은 분양가에 포함되지 않아 전매가와 섞일 수 있습니다.',
+      sl.addText(['보는 법: 프리미엄 = 같은 전용면적대 분양권 전매 중위가 − 청약홈 최고 분양가. 최고가는 고층 기준이라 실제 분양가보다 높아, 프리미엄은 실제보다 작게 나올 수 있습니다. 발코니 확장·옵션 비용은 분양가에 포함되지 않아 전매가와 섞일 수 있습니다. 전매가 제한되는 지역·단지는 전매 거래가 없을 수 있습니다.',
         '분양권 단지는 국토부 신고명과 청약홈 단지명이 달라, 같은 동에서 이름이 4자 이상 겹치는 것을 같은 단지로 보았습니다. 맞는 단지를 못 찾았거나 시군구 자료가 없으면 "전매 거래 없음/미확인"으로 표시했습니다.',
         `신축·구축 격차는 반경 ${radTxt} 안 전체 단지 중 준공연도를 확인한 단지만 썼고, 대상지와 생활권(학군·역·경계)이 다른 단지가 섞일 수 있어 지도로 확인이 필요합니다.${pv.length ? '' : ' 이번 자료는 프리미엄을 계산할 전매 거래가 없었습니다.'}`].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
         { x: LX, y: 5.95, w: LW, h: 1.0, fontFace: F, fontSize: 8.5, color: MUTE, margin: 0, valign: 'top', paraSpaceAfter: 3, isTextBox: true, fit: 'shrink' });
