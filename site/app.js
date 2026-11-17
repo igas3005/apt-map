@@ -277,6 +277,34 @@ async function geocodeLoose(addr) {
 // 반환 [lat, lon, approx]: approx=true면 지구·동 중심 정도의 개략 위치.
 function kwSearch(q, cityTok) { return new Promise(res => { if (!places) return res(null); places.keywordSearch(q, (r, st) => {
   if (st !== kakao.maps.services.Status.OK) return res(null); const h = r.find(x => !cityTok || String(x.address_name || '').includes(cityTok)); res(h ? [+h.y, +h.x] : null); }); }); }
+// 입지환경: 카카오 로컬 검색으로 대상지 주변 시설까지의 거리·개수를 모은다 (직선거리 기준)
+function kakaoNear(kind, c, radius, filt) {
+  return new Promise(res => { if (!places || !window.kakao) return res(null); const S0 = kakao.maps.services, items = []; let fin = false;
+    const end = v => { if (!fin) { fin = true; res(v); } }; setTimeout(() => end(null), 9000);
+    const cb = (r, st, pg) => { if (st === S0.Status.OK) { items.push(...r); if (pg.hasNextPage && pg.current < 3) pg.nextPage(); else end({ total: pg.totalCount, items: filt ? items.filter(filt) : items }); }
+      else end(st === S0.Status.ZERO_RESULT ? { total: 0, items: [] } : null); };
+    const opt = { location: new kakao.maps.LatLng(c.lat, c.lon), radius, sort: S0.SortBy.DISTANCE };
+    try { if (kind.cat) places.categorySearch(kind.cat, cb, opt); else places.keywordSearch(kind.kw, cb, opt); } catch (e) { end(null); } });
+}
+async function locEnv(c) {
+  const cn = x => String(x.category_name || ''), sch = re => x => re.test(cn(x)) && !/학원|교습|어린이집/.test(cn(x));
+  const [sub, el, mi, hi, aca, kid, mart, dept, hosp, park] = await Promise.all([
+    kakaoNear({ cat: 'SW8' }, c, 2000), kakaoNear({ kw: '초등학교' }, c, 1500, sch(/초등학교/)), kakaoNear({ kw: '중학교' }, c, 2000, sch(/중학교/)), kakaoNear({ kw: '고등학교' }, c, 3000, sch(/고등학교/)),
+    kakaoNear({ cat: 'AC5' }, c, 1000), kakaoNear({ cat: 'PS3' }, c, 500), kakaoNear({ cat: 'MT1' }, c, 3000), kakaoNear({ kw: '백화점' }, c, 5000, x => /백화점/.test(cn(x) + x.place_name)),
+    kakaoNear({ kw: '종합병원' }, c, 5000, x => /종합병원/.test(cn(x))), kakaoNear({ kw: '공원' }, c, 1500, x => /공원/.test(cn(x)) && !/주차/.test(cn(x))) ]);
+  return { sub, el, mi, hi, aca, kid, mart, dept, hosp, park };
+}
+const walkMin = d => Math.max(1, Math.round(d / 80)), dm = d => d < 1000 ? Math.round(d) + 'm' : (d / 1000).toFixed(1) + 'km';
+function envRows(env) {   // [구분, 시설, 이름, 거리, 도보] 목록과 제목 문장을 만든다
+  const nearest = (r, k, grp, lab, rad) => { const arr = r ? r.items.slice(0, k) : null; if (!arr) return [[grp, lab, '조회하지 못함', '-', '-']]; if (!arr.length) return [[grp, lab, `반경 ${dm(rad)} 안에 없음`, '-', '-']];
+    return arr.map((x, i) => [i ? '' : grp, i ? '' : lab, String(x.place_name).slice(0, 18), dm(+x.distance), walkMin(+x.distance) + '분']); };
+  const count = (r, grp, lab, rad, unit) => [[grp, lab, r ? `반경 ${dm(rad)} 안 ${r.total > 45 ? '45+' : r.total}${unit}` : '조회하지 못함', '', '']];
+  const L = [].concat(nearest(env.sub, 3, '교통', '지하철역', 2000), nearest(env.el, 2, '교육', '초등학교', 1500), nearest(env.mi, 1, '', '중학교', 2000), nearest(env.hi, 1, '', '고등학교', 3000), count(env.aca, '', '학원', 1000, '곳'), count(env.kid, '', '어린이집·유치원', 500, '곳'));
+  const R = [].concat(nearest(env.mart, 2, '생활', '대형마트', 3000), nearest(env.dept, 1, '', '백화점', 5000), nearest(env.hosp, 1, '의료', '종합병원', 5000), nearest(env.park, 2, '여가', '공원', 1500));
+  const f = (r) => r && r.items[0] ? r.items[0] : null, s1 = f(env.sub), e1 = f(env.el), m1 = f(env.mart);
+  const head = (s1 || e1 || m1) ? ['가장 가까운 ' + (s1 ? `지하철역 ${String(s1.place_name).slice(0, 14)} ${dm(+s1.distance)}(도보 약 ${walkMin(+s1.distance)}분)` : '지하철역 2km 밖'), e1 ? `초등학교 ${dm(+e1.distance)}` : '', m1 ? `대형마트 ${dm(+m1.distance)}` : ''].filter(Boolean).join(', ') : '입지환경 정보를 불러오지 못했습니다';
+  return { L, R, head };
+}
 async function geocodeSale(addr, name) {
   const k = 'sale|' + addr + '|' + name; if (GEO[k]) return GEO[k];
   const done = v => { if (v) { GEO[k] = v; clearTimeout(geoT); geoT = setTimeout(() => { try { localStorage.setItem('geo_v1', JSON.stringify(GEO)); } catch (e) {} }, 800); } return v; };
@@ -724,6 +752,15 @@ async function makeReport() {
       .concat(salePts.slice(0, 6).map((x, i) => [cell(String.fromCharCode(65 + i), { bold: true, color: 'E8710A' }), cell(String(x.r0.HOUSE_NM || '') + ' (분양)', { align: 'left' }), cell(String(x.r0.MVN_PREARNGE_YM || '').slice(0, 4) || '-'), cell(dTxt(x.d))])), 8.95, 1.4, 3.83, [0.45, 2.1, 0.6, 0.68], 8.5, 0.27);
     if (mapPts.length > nC) sl.addText(`${nC + 1}번 이후 ${mapPts.length - nC}개 단지는 단지 요약표 참조`, { x: 8.95, y: 6.7, w: 3.8, h: 0.2, fontFace: F, fontSize: 8, color: MUTE, margin: 0, isTextBox: true });
 
+    // 입지환경 (카카오 지도 검색)
+    status('기초자료 준비 중… 입지환경 조회');
+    { const env = await locEnv(S.center), er = envRows(env);
+      sl = page(er.head, 'LOCATION ENVIRONMENT');
+      const mk = (rows) => [['구분', '시설', '이름', '거리', '도보'].map(TH)].concat(rows.map(r => r.map((t, i) => cell(t, i === 0 ? { bold: true, color: NAVY } : (i === 2 ? { align: 'left' } : {})))));
+      tbl(sl, mk(er.L), LX, 1.45, 6.0, [0.75, 1.55, 2.25, 0.8, 0.65], 9, 0.34);
+      tbl(sl, mk(er.R), LX + 6.25, 1.45, 5.9, [0.75, 1.5, 2.2, 0.8, 0.65], 9, 0.34);
+      sl.addText(['거리는 대상지에서 직선거리이고, 도보 시간은 80m/분으로 환산한 추정입니다(실제 경로·고저차와 다릅니다).', '카카오맵 장소 검색 결과 기준이며, 개수는 최대 45곳까지만 집계됩니다. 학교 배정(학구도)은 따로 확인해야 합니다.', '버스·광역교통(GTX 등)과 개발계획은 이 쪽에 포함하지 않았습니다.'].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
+        { x: LX + 6.25, y: 4.7, w: 5.9, h: 1.6, fontFace: F, fontSize: 9, color: MUTE, margin: 0, valign: 'top', paraSpaceAfter: 4, isTextBox: true }); }
     // 추이
     const ms = []; for (let k = 23; k >= 0; k--) { const d = new Date(S.asOf.getFullYear(), S.asOf.getMonth() - k, 1); ms.push(d.getFullYear() * 100 + d.getMonth() + 1); }
     const allPairs = pick.flatMap(r => r.all.map(t => [r, t]));
@@ -982,6 +1019,15 @@ async function makeOffiReport() {
     tbl(sl, [['No.', '오피스텔', '준공', '거리'].map(TH)].concat(mapPts.slice(0, nC).map((r, i) => [cell(i + 1, { bold: true, color: NAVY }), cell(r.g.name, { align: 'left' }), cell(r.year || '-'), cell(dTxt(r.d))]))
       .concat(salePts.slice(0, 6).map((x, i) => [cell(String.fromCharCode(65 + i), { bold: true, color: 'E8710A' }), cell(String(x.r0.HOUSE_NM || '') + ' (분양)', { align: 'left' }), cell(String(x.r0.MVN_PREARNGE_YM || '').slice(0, 4) || '-'), cell(dTxt(x.d))])), 8.95, 1.4, 3.83, [0.45, 2.1, 0.6, 0.68], 8.5, 0.27);
     if (mapPts.length > nC) sl.addText(`${nC + 1}번 이후 ${mapPts.length - nC}곳은 요약표 참조`, { x: 8.95, y: 6.7, w: 3.8, h: 0.2, fontFace: F, fontSize: 8, color: MUTE, margin: 0, isTextBox: true });
+    // 입지환경 (카카오 지도 검색)
+    status('기초자료 준비 중… 입지환경 조회');
+    { const env = await locEnv(S.center), er = envRows(env);
+      sl = page(er.head, 'LOCATION ENVIRONMENT');
+      const mk = (rows) => [['구분', '시설', '이름', '거리', '도보'].map(TH)].concat(rows.map(r => r.map((t, i) => cell(t, i === 0 ? { bold: true, color: NAVY } : (i === 2 ? { align: 'left' } : {})))));
+      tbl(sl, mk(er.L), LX, 1.45, 6.0, [0.75, 1.55, 2.25, 0.8, 0.65], 9, 0.34);
+      tbl(sl, mk(er.R), LX + 6.25, 1.45, 5.9, [0.75, 1.5, 2.2, 0.8, 0.65], 9, 0.34);
+      sl.addText(['거리는 대상지에서 직선거리이고, 도보 시간은 80m/분으로 환산한 추정입니다(실제 경로·고저차와 다릅니다).', '카카오맵 장소 검색 결과 기준이며, 개수는 최대 45곳까지만 집계됩니다. 학교 배정(학구도)은 따로 확인해야 합니다.', '버스·광역교통(GTX 등)과 개발계획은 이 쪽에 포함하지 않았습니다.'].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
+        { x: LX + 6.25, y: 4.7, w: 5.9, h: 1.6, fontFace: F, fontSize: 9, color: MUTE, margin: 0, valign: 'top', paraSpaceAfter: 4, isTextBox: true }); }
     // 추이
     const ms = []; for (let k = 23; k >= 0; k--) { const d = new Date(S.asOf.getFullYear(), S.asOf.getMonth() - k, 1); ms.push(d.getFullYear() * 100 + d.getMonth() + 1); }
     const allPairs = rows.flatMap(r => r.all.map(t => [r, t]));
