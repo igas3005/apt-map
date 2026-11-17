@@ -264,6 +264,9 @@ function geocodeAddr(addr) {
     res(v); }));
 }
 async function geocodeLoose(addr) {
+  // 공급위치가 '지구명 블록(경기도 ○○시 ○○동 646-2 일원)'처럼 괄호 안에 지번 주소가 있으면 그 주소부터 찾는다
+  const inner = (String(addr || '').match(/\(([^()]*(?:시|군|구)\s[^()]*\d[^()]*)\)/) || [])[1];
+  if (inner) { const v = await geocodeLoose(inner); if (v) return v; }
   const a = String(addr || '').replace(/\(.*?\)/g, ' ').replace(/(일원|일대|번지|외\s*\d+\s*필지).*$/, '').replace(/\s+/g, ' ').trim();
   const toks = a.split(' ');
   for (let k = 0; k < 3 && toks.length >= 3; k++) { const v = await geocodeAddr(toks.join(' ')); if (v) return v; toks.pop(); }
