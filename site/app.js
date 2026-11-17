@@ -482,11 +482,12 @@ async function saleExtra(id, offi) {       // 주택형별 공급·최고분양�
     h += '<table><tr>' + cols.map(k => `<th>${esc(lab(k))}</th>`).join('') + '</tr>' + mdl.slice().sort((a, b) => parseFloat(a.EXCLUSE_AR) - parseFloat(b.EXCLUSE_AR)).map(m => '<tr>' + cols.map(k => `<td>${k === 'EXCLUSE_AR' ? esc(Math.round(parseFloat(m[k]) * 100) / 100) : (k.includes('AMOUNT') ? '<b>' + num(m[k]) + '</b>' : esc(m[k] == null || m[k] === '' ? '-' : m[k]))}</td>`).join('') + '</tr>').join('') + '</table><div class="note">오피스텔은 전용면적 기준 주택형이에요. 분양가는 주택형별 최고가 기준(층별 가격은 모집공고문)이에요.</div>'; }
   else if (mdl[0].HOUSE_TY === undefined) h += rawTable(mdl);
   else h += '<table><tr><th>주택형</th><th>공급면적㎡</th><th>일반</th><th>특별</th><th>최고 분양가(만원)</th></tr>' + mdl.map(m => `<tr><td>${esc(m.HOUSE_TY)}</td><td>${esc(m.SUPLY_AR == null ? '-' : m.SUPLY_AR)}</td><td>${num(m.SUPLY_HSHLDCO)}</td><td>${num(m.SPSPLY_HSHLDCO)}</td><td><b>${num(m.LTTOT_TOP_AMOUNT)}</b></td></tr>`).join('') + '</table><div class="note">분양가는 주택형별 최고가 기준이에요. 층별 가격은 모집공고문에 있어요.</div>';
-  h += '<div class="sec">청약 경쟁률 (청약홈, 일반공급)</div>';
+  h += '<div class="sec">청약 경쟁률 (청약홈' + (offi ? '' : ', 일반공급') + ')</div>';
   if (cmp.err) h += er(cmp.err); else if (!cmp.length) h += '<div class="note">아직 경쟁률 자료가 없어요 (청약 전이거나 미집계).</div>';
   else if (cmp[0].HOUSE_TY === undefined || cmp[0].CMPET_RATE === undefined) h += rawTable(cmp);
-  else h += '<table><tr><th>주택형</th><th>순위</th><th>거주</th><th>공급</th><th>접수</th><th>경쟁률</th></tr>' + cmp.slice().sort((a, b) => String(a.HOUSE_TY).localeCompare(String(b.HOUSE_TY)) || (a.SUBSCRPT_RANK_CODE - b.SUBSCRPT_RANK_CODE)).map(c =>
-    `<tr><td>${esc(c.HOUSE_TY)}</td><td>${esc(c.SUBSCRPT_RANK_CODE)}순위</td><td>${esc(c.RESIDE_SENM || c.RESIDE_SECD || '')}</td><td>${num(c.SUPLY_HSHLDCO)}</td><td>${num(c.REQ_CNT)}</td><td><b>${esc(c.CMPET_RATE == null ? '-' : c.CMPET_RATE)}</b></td></tr>`).join('') + '</table>';
+  else { const hasRank = cmp.some(c => c.SUBSCRPT_RANK_CODE !== undefined), hasRes = cmp.some(c => c.RESIDE_SENM !== undefined || c.RESIDE_SECD !== undefined);   // 오피스텔 자료에는 순위·거주 구분이 없다
+    h += '<table><tr><th>주택형</th>' + (hasRank ? '<th>순위</th>' : '') + (hasRes ? '<th>거주</th>' : '') + '<th>공급</th><th>접수</th><th>경쟁률</th></tr>' + cmp.slice().sort((a, b) => String(a.HOUSE_TY).localeCompare(String(b.HOUSE_TY)) || (a.SUBSCRPT_RANK_CODE - b.SUBSCRPT_RANK_CODE)).map(c =>
+      `<tr><td>${esc(c.HOUSE_TY)}</td>${hasRank ? `<td>${esc(c.SUBSCRPT_RANK_CODE)}순위</td>` : ''}${hasRes ? `<td>${esc(c.RESIDE_SENM || c.RESIDE_SECD || '')}</td>` : ''}<td>${num(c.SUPLY_HSHLDCO)}</td><td>${num(c.REQ_CNT)}</td><td><b>${esc(c.CMPET_RATE == null ? '-' : c.CMPET_RATE)}</b></td></tr>`).join('') + '</table>'; }
   return h;
 }
 async function openSale(id) {
@@ -984,14 +985,14 @@ async function makeOffiReport() {
           if (amt) { top = `${m0.HOUSE_TY || ''} · ${n(amt)}`; if (su > 0) pp = n(amt / (su / PY)); } }
         else if (Array.isArray(mdl) && mdl.length && mdl[0].EXCLUSE_AR !== undefined) { const ak = Object.keys(mdl[0]).find(k => /AMOUNT/.test(k) && !/SUBSCRPT|REQST/.test(k)), m0 = mdl.slice().sort((a, b) => (+b.SUPLY_HSHLDCO || 0) - (+a.SUPLY_HSHLDCO || 0))[0], amt = ak ? +String(m0[ak]).replace(/,/g, '') : 0, ex = parseFloat(m0.EXCLUSE_AR);
           if (amt && ex > 0) { top = `전용 ${fl2(ex)}㎡ · ${n(amt)}`; pp = n(amt / (ex / PY)); } }
-        if (Array.isArray(cmp) && cmp.length && cmp[0].REQ_CNT !== undefined) { const c1 = cmp.filter(z => String(z.SUBSCRPT_RANK_CODE) === '1'), req = c1.reduce((a, z) => a + (+String(z.REQ_CNT).replace(/,/g, '') || 0), 0), ty = new Map(); for (const z of c1) ty.set(z.HOUSE_TY, +z.SUPLY_HSHLDCO || 0);
+        if (Array.isArray(cmp) && cmp.length && cmp[0].REQ_CNT !== undefined) { const c1 = cmp.some(z => z.SUBSCRPT_RANK_CODE !== undefined) ? cmp.filter(z => String(z.SUBSCRPT_RANK_CODE) === '1') : cmp, req = c1.reduce((a, z) => a + (+String(z.REQ_CNT).replace(/,/g, '') || 0), 0), ty = new Map(); for (const z of c1) ty.set(z.HOUSE_TY, +z.SUPLY_HSHLDCO || 0);
           const sup = [...ty.values()].reduce((a, z) => a + z, 0); if (sup > 0) cr = (req / sup).toFixed(2) + ' : 1'; }
       } catch (e) {}
       const ym = parseInt(String(r0.MVN_PREARNGE_YM || '').replace(/\D/g, '').slice(0, 6), 10) || 0;
       saleRows.push([cell(String.fromCharCode(65 + saleRows.length), { bold: true, color: 'E8710A' }), cell(r0.RCRIT_PBLANC_DE || '-'), cell(r0.HOUSE_NM || '', { align: 'left', bold: true }), cell(typeOf(r0) || '-'), cell(String(r0.HSSPLY_ADRES || '').replace(/^\S+(특별시|광역시|도)\s*/, '').replace(/\(.*?\)/g, '').trim(), { align: 'left' }), cell((x.approx ? '~' : '') + dTxt(x.d)), cell(n(+r0.TOT_SUPLY_HSHLDCO)), cell(r0.MVN_PREARNGE_YM || '-'), cell(ym ? (ym >= ymNow ? '입주 전' : '입주 후') : '-', ym >= ymNow ? { bold: true, color: 'E8710A' } : {}), cell(top), cell(pp, { bold: true, color: NAVY }), cell(cr)]); }
     sl = page(`반경 ${saleFar ? '밖 ' : saleRTxt + ' 내 '}최근 2년 오피스텔·도시형·생활숙박 분양 ${sales.length}건`, 'NEW SUPPLY');
     sl.addText(`주변 분양 사례 (청약홈 · 위치도의 알파벳 · ${saleFar ? '반경 ' + saleRTxt + ' 안에는 없어 같은 시·군 가까운 순 ' + sales.length + '건' : '반경 ' + saleRTxt + ' 이내 가까운 순'} · 분양가는 공급세대가 가장 많은 주택형의 최고가, 평당가는 분양가÷전용면적, 만원)`, { x: LX, y: 1.4, w: LW, h: 0.26, fontFace: F, fontSize: 10.5, bold: true, color: INK, margin: 0, isTextBox: true });
-    if (saleRows.length) { tbl(sl, [['', '모집공고일', '단지명', '유형', '공급위치', '거리', '실수', '입주예정', '상태', '분양가 (주택형·최고가)', '전용 평당가', '1순위 경쟁률'].map(TH)].concat(saleRows), LX, 1.7, LW, [0.4, 0.9, 1.9, 0.9, 1.9, 0.6, 0.55, 0.75, 0.65, 1.5, 0.9, 1.28], 8.5, 0.28);
+    if (saleRows.length) { tbl(sl, [['', '모집공고일', '단지명', '유형', '공급위치', '거리', '실수', '입주예정', '상태', '분양가 (주택형·최고가)', '전용 평당가', '경쟁률'].map(TH)].concat(saleRows), LX, 1.7, LW, [0.4, 0.9, 1.9, 0.9, 1.9, 0.6, 0.55, 0.75, 0.65, 1.5, 0.9, 1.28], 8.5, 0.28);
       const nt = [sales.some(x => x.approx) ? '~ 표시는 지구·동 중심 기준의 개략 거리' : '', noGeo.length ? `위치를 찾지 못해 제외한 분양 공고 ${noGeo.length}건` : '', '오피스텔은 분양권 전매 실거래 공개 자료가 없어 넣지 않았습니다'].filter(Boolean).join(' · ');
       sl.addText(nt, { x: LX, y: 1.7 + 0.28 * (saleRows.length + 1) + 0.12, w: LW, h: 0.2, fontFace: F, fontSize: 8, color: WARN, margin: 0, isTextBox: true }); }
     else sl.addText(saleNote || '조건에 맞는 분양 단지가 없습니다.', { x: LX, y: 1.7, w: LW, h: 0.28, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true });
