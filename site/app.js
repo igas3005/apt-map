@@ -700,14 +700,20 @@ async function makeReport() {
     kpi(sl, LX + (kw + kg) * 3, 1.4, kw, '59㎡ 중위 실거래가', p59.length ? `${mA(p59)}만원` : '-', p59.length ? `최근 1년 ${p59.length}건 · 평당 ${pA(p59)}만원` : '최근 1년 59㎡ 거래 없음');
     const kBar = det.some(r => stOf(r, 84)) ? 84 : (det.some(r => stOf(r, 59)) ? 59 : 0);
     const bars = (kBar ? det.filter(r => stOf(r, kBar)).map(r => ({ name: r.c.name.length > 14 ? r.c.name.slice(0, 14) + '…' : r.c.name, v: Math.round(stOf(r, kBar).med) })) : det.map(r => ({ name: r.c.name.length > 14 ? r.c.name.slice(0, 14) + '…' : r.c.name, v: Math.round(sumOf(r).ppy) }))).sort((a, b) => b.v - a.v).slice(0, 10).reverse();
+    const nBarAll = kBar ? det.filter(r => stOf(r, kBar)).length : det.length, noK = kBar ? det.filter(r => !stOf(r, kBar)) : [];
+    const barNote = (kBar === 84 ? '84㎡(국민평형) 실거래가 있는 ' + nBarAll + '개 단지만 그렸습니다. 같은 면적끼리 비교하려는 기준이라 해당 면적 거래가 없는 단지는 제외합니다.'
+      : kBar === 59 ? '대상 단지에 84㎡ 거래가 없어 59㎡ 기준으로 그렸습니다(거래 있는 ' + nBarAll + '개 단지). 같은 면적끼리 비교하려는 기준입니다.'
+      : '84㎡·59㎡ 거래가 모두 없어 단지별 주력 면적 중위 평당가로 비교했습니다.')
+      + (noK.length ? ` ${kBar}㎡ 거래 없음 ${noK.length}개: ${noK.slice(0, 4).map(r => r.c.name).join(', ')}${noK.length > 4 ? ' 외 ' + (noK.length - 4) + '개' : ''}.` : '') + (nBarAll > 10 ? ` 상위 10개만 표시(전체 ${nBarAll}개).` : '');
     sl.addText(kBar ? `단지별 ${kBar}㎡ 중위 실거래가 (만원)` : '단지별 평당가 (주력 면적타입 중위, 만원)', { x: LX, y: 2.8, w: 7.4, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
-    if (bars.length) sl.addChart(pres.ChartType.bar, [{ name: kBar ? '중위 실거래가' : '평당가', labels: bars.map(b => b.name), values: bars.map(b => b.v) }], Object.assign(chartBase(), { x: LX, y: 3.08, w: 7.4, h: 3.85, barDir: 'bar', chartColors: [NAVY], showValue: true, dataLabelPosition: 'outEnd', barGapWidthPct: 55, valAxisMinVal: 0 }));
+    if (bars.length) sl.addChart(pres.ChartType.bar, [{ name: kBar ? '중위 실거래가' : '평당가', labels: bars.map(b => b.name), values: bars.map(b => b.v) }], Object.assign(chartBase(), { x: LX, y: 3.08, w: 7.4, h: 3.3, barDir: 'bar', chartColors: [NAVY], showValue: true, dataLabelPosition: 'outEnd', barGapWidthPct: 55, valAxisMinVal: 0 }));
     else sl.addText('기간 내 거래가 없어 차트를 그리지 못했습니다.', { x: LX, y: 3.2, w: 7.4, h: 0.3, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true });
+    sl.addText(barNote, { x: LX, y: 6.45, w: 7.4, h: 0.5, fontFace: F, fontSize: 8.5, color: MUTE, margin: 0, valign: 'top', isTextBox: true });
     sl.addShape(pres.ShapeType.rect, { x: 8.1, y: 2.72, w: 4.68, h: 4.2, fill: { color: BG }, line: { color: BG, width: 0 } });
     sl.addText('조사 기준', { x: 8.3, y: 2.85, w: 4.4, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
     sl.addText([`범위: 대상지 반경 ${radTxt} 안 아파트 (선택 반경 ${radAsk}${radUsed > S.rad ? ', 비교 단지가 3개 미만이라 확대' : ''})`, `연차: 준공 5년 이내 우선(3개 이상), 아니면 10년 이내, 아니면 전체 → 이번 자료는 ${tier}${tierNote}`, '실거래: 단지별 최근 1년, 1년 내 거래가 없는 단지는 최근 2년', `평당가: 공급면적 기준. 단지별 공급/전용 비율은 K-apt 값을 쓰고, 없는 ${estN}개 단지는 전용 × 1.32로 추정`,
-      noTr.length ? `최근 2년 거래가 없는 단지 ${noTr.length}개는 요약표에만 표시` : '대상 단지 모두 최근 2년 내 거래 있음', `분양: 청약홈 최근 2년 공고, 반경 ${saleRTxt} 이내 ${saleFar ? '없음 → 같은 시·군 가까운 순 ' : ''}${sales.length}건`].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
-      { x: 8.3, y: 3.2, w: 4.33, h: 3.6, fontFace: F, fontSize: 10, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 8, isTextBox: true });
+      noTr.length ? `최근 2년 거래가 없는 단지 ${noTr.length}개는 요약표에만 표시` : '대상 단지 모두 최근 2년 내 거래 있음', `차트: ${kBar ? kBar + '㎡ 거래가 있는 단지만 (같은 면적끼리 비교)' : '주력 면적 평당가 (84·59㎡ 거래 없음)'}${noK.length ? ', 거래 없는 ' + noK.length + '개 제외' : ''}`, `분양: 청약홈 최근 2년 공고, 반경 ${saleRTxt} 이내 ${saleFar ? '없음 → 같은 시·군 가까운 순 ' : ''}${sales.length}건`].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
+      { x: 8.3, y: 3.2, w: 4.33, h: 3.6, fontFace: F, fontSize: 9.5, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 6, isTextBox: true });
 
     // 위치도
     sl = page(`대상지에서 ${far < 1000 ? Math.round(far) + 'm' : (far / 1000).toFixed(1) + 'km'} 안에 비교 단지 ${mapPts.length}개, 분양 단지 ${salePts.length}개가 분포`, 'LOCATION');
@@ -920,13 +926,17 @@ async function makeOffiReport() {
     kpi(sl, LX + (kw + kg), 1.4, kw, '최근 1년 거래', `${n(pairs1.length)}건`, `직전 1년 ${n(pairs0.length)}건 · 평당가 ${chgTxt}`);
     for (let i = 0; i < 2; i++) { const x = top2[i]; kpi(sl, LX + (kw + kg) * (2 + i), 1.4, kw, x ? `${bLab(x)} ${x.b.t.replace(/^[^(]*/, '')} 중위가` : '다음 면적대', x ? `${n(x.med)}만원` : '-', x ? `최근 1년 ${x.cnt}건 · 전용 평당 ${n(x.ppy)}만원` : '거래 없음'); }
     const bars = rows.filter(r => r.tr.length).map(r => ({ name: shortN(r.g.name), v: Math.round(sumOf(r).ppy) })).sort((a, b) => b.v - a.v).slice(0, 10).reverse();
+    const nAllB = rows.filter(r => r.tr.length).length, noT = rows.filter(r => !r.tr.length);
+    const barNote = '건물별 주력 전용면적(거래가 가장 많은 면적)의 중위 전용 평당가입니다. 면적이 다른 건물끼리도 같은 단위로 비교하려는 기준입니다.'
+      + (noT.length ? ` 최근 2년 거래가 없는 ${noT.length}개 건물은 제외: ${noT.slice(0, 4).map(r => shortN(r.g.name)).join(', ')}${noT.length > 4 ? ' 외 ' + (noT.length - 4) + '개' : ''}.` : '') + (nAllB > 10 ? ` 상위 10개만 표시(전체 ${nAllB}개).` : '');
     sl.addText('오피스텔별 전용 평당가 (주력 면적 중위, 만원)', { x: LX, y: 2.8, w: 7.4, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
-    if (bars.length) sl.addChart(pres.ChartType.bar, [{ name: '전용 평당가', labels: bars.map(b => b.name), values: bars.map(b => b.v) }], Object.assign(chartBase(), { x: LX, y: 3.08, w: 7.4, h: 3.85, barDir: 'bar', chartColors: [NAVY], showValue: true, dataLabelPosition: 'outEnd', barGapWidthPct: 55, valAxisMinVal: 0 }));
+    if (bars.length) sl.addChart(pres.ChartType.bar, [{ name: '전용 평당가', labels: bars.map(b => b.name), values: bars.map(b => b.v) }], Object.assign(chartBase(), { x: LX, y: 3.08, w: 7.4, h: 3.3, barDir: 'bar', chartColors: [NAVY], showValue: true, dataLabelPosition: 'outEnd', barGapWidthPct: 55, valAxisMinVal: 0 }));
+    sl.addText(barNote, { x: LX, y: 6.45, w: 7.4, h: 0.5, fontFace: F, fontSize: 8.5, color: MUTE, margin: 0, valign: 'top', isTextBox: true });
     sl.addShape(pres.ShapeType.rect, { x: 8.1, y: 2.72, w: 4.68, h: 4.2, fill: { color: BG }, line: { color: BG, width: 0 } });
     sl.addText('조사 기준', { x: 8.3, y: 2.85, w: 4.4, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
     sl.addText([`범위: 대상지 반경 ${radTxt} 안 오피스텔 (선택 반경 ${radAsk}${radUsed > S.rad ? ', 비교 대상이 3곳 미만이라 확대' : ''})`, '실거래: 건물별 최근 1년, 없으면 최근 2년 (국토부 오피스텔 매매 신고 자료)', '면적·평당가: 전용면적 기준 (소수점 버림). 오피스텔은 전용률이 낮아 공급면적으로 환산하지 않음',
-      `연차: ${S.oyear ? '준공 ' + S.oyear + '년 이내만 포함' : '준공연도 제한 없음'}`, `면적대: ${OBANDS.slice(1).map(b => b.t).join(' / ')}`, `분양: 청약홈 최근 2년 공고, 반경 ${saleRTxt} 이내 ${saleFar ? '없음 → 같은 시·군 가까운 순 ' : ''}${sales.length}건`].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
-      { x: 8.3, y: 3.2, w: 4.33, h: 3.6, fontFace: F, fontSize: 10, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 8, isTextBox: true });
+      `연차: ${S.oyear ? '준공 ' + S.oyear + '년 이내만 포함' : '준공연도 제한 없음'}`, `면적대: ${OBANDS.slice(1).map(b => b.t).join(' / ')}`, `차트: 주력 면적 중위 평당가${noT.length ? ', 거래 없는 ' + noT.length + '개 제외' : ''}${nAllB > 10 ? ', 상위 10개만' : ''}`, `분양: 청약홈 최근 2년 공고, 반경 ${saleRTxt} 이내 ${saleFar ? '없음 → 같은 시·군 가까운 순 ' : ''}${sales.length}건`].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
+      { x: 8.3, y: 3.2, w: 4.33, h: 3.6, fontFace: F, fontSize: 9.5, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 6, isTextBox: true });
     // 위치도
     sl = page(`대상지에서 ${dTxt(far)} 안에 오피스텔 ${mapPts.length}곳, 분양 단지 ${salePts.length}곳이 분포`, 'LOCATION');
     if (mi) sl.addImage({ data: mi.data, x: LX, y: 1.4, w: 8.05, h: 5.4 });
