@@ -727,15 +727,16 @@ async function makeReport() {
         return [cell(kk + '㎡'), cell(pyR(r, kk) + '평'), cell(v.length), cell(n(Math.max(...am))), cell(n(Math.min(...am))), cell(n(med(am)), { bold: true, color: NAVY }), cell(n(mean(am))), cell(n(med(v.map(t => ppy(r, t)))), { bold: true })]; }));
       tbl(sl, st, LX, 2.05, 7.0, [0.8, 0.85, 0.6, 0.95, 0.95, 0.95, 0.95, 0.95], 9, 0.29);
       const y1 = 2.05 + 0.29 * st.length + 0.28;
-      const tA = g.has(84) ? 84 : (types[0] ? types[0][0] : null), tB = g.has(59) && tA !== 59 ? 59 : ((types.find(x => x[0] !== tA) || [null])[0]);
-      const recent = k => { const v = (g.get(k) || []).slice().sort((a, b) => b[0] - a[0]); return [['계약일', '전용 (공급 평)', '층', '거래가(만원)', '평당가(만원)'].map(TH)].concat(v.slice(0, 5).map(t => [cell(ds(t[0])), cell(`${t[1]}㎡ (${pyR(r, t[1])}평)`), cell(t[2]), cell(n(t[3]), { bold: true }), cell(n(ppy(r, t)))])); };
-      sl.addText(`${tA}㎡ 최근 실거래 5건 (최근 ${r.span}년 ${(g.get(tA) || []).length}건 중)`, { x: LX, y: y1, w: 7, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
+      const ga = new Map(); for (const t of r.all) { const kk = bk(t); (ga.get(kk) || ga.set(kk, []).get(kk)).push(t); }   // 최근 2년 전체 (최근 5건은 거래가 드문 타입도 채우려고 2년치에서 뽑는다)
+      const tA = ga.has(84) ? 84 : (types[0] ? types[0][0] : null), tB = ga.has(59) && tA !== 59 ? 59 : ((types.find(x => x[0] !== tA) || [null])[0]);
+      const recent = k => { const v = (ga.get(k) || []).slice().sort((a, b) => b[0] - a[0]); return [['계약일', '전용 (공급 평)', '층', '거래가(만원)', '평당가(만원)'].map(TH)].concat(v.slice(0, 5).map(t => [cell(ds(t[0])), cell(`${t[1]}㎡ (${pyR(r, t[1])}평)`), cell(t[2]), cell(n(t[3]), { bold: true }), cell(n(ppy(r, t)))])); };
+      sl.addText(`${tA}㎡ 최근 실거래 5건 (최근 2년 ${(ga.get(tA) || []).length}건 중)`, { x: LX, y: y1, w: 7, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
       tbl(sl, recent(tA), LX, y1 + 0.3, 7.0, [1.2, 2.0, 0.8, 1.6, 1.4], 9, 0.29);
       const cm = ms.map(mm => { const v = r.all.filter(t => Math.floor(t[0] / 100) === mm); return v.length ? { lab: String(mm).slice(2, 4) + '.' + String(mm).slice(4), p: Math.round(med(v.map(t => ppy(r, t)))) } : null; }).filter(Boolean);
       sl.addText('월별 중위 평당가 (최근 2년, 만원)', { x: 7.9, y: 1.75, w: 4.9, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
       if (cm.length > 1) sl.addChart(pres.ChartType.line, [{ name: '중위 평당가', labels: cm.map(x => x.lab), values: cm.map(x => x.p) }], Object.assign(chartBase(), { x: 7.9, y: 2.05, w: 4.88, h: tB ? 2.25 : 4.75, chartColors: [ACC], lineSize: 2.25, lineDataSymbolSize: 6, catAxisLabelFontSize: 8 }));
       else sl.addText('추이를 그릴 만큼 거래가 없습니다.', { x: 7.9, y: 2.15, w: 4.8, h: 0.3, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true });
-      if (tB) { sl.addText(`${tB}㎡ 최근 실거래 5건 (${(g.get(tB) || []).length}건 중)`, { x: 7.9, y: 4.42, w: 4.88, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
+      if (tB) { sl.addText(`${tB}㎡ 최근 실거래 5건 (최근 2년 ${(ga.get(tB) || []).length}건 중)`, { x: 7.9, y: 4.42, w: 4.88, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
         tbl(sl, recent(tB).map((rw, i) => i ? [rw[0], cell(`${rw[1].text.split(' ')[0]}`), rw[2], rw[3], rw[4]] : rw), 7.9, 4.72, 4.88, [0.95, 1.0, 0.5, 1.2, 1.23], 8.5, 0.29); } }
 
     // 주변 분양 + 분양권·입주권 실거래
