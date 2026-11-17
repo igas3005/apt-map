@@ -805,6 +805,42 @@ async function makeReport() {
         return [cell(g.name, { align: 'left', bold: true }), cell(g.addr, { align: 'left' }), cell(dTxt(g.d)), cell(g.tr.length), cell(b.k + '㎡'), cell(n(med(am)), { bold: true, color: NAVY }), cell(n(Math.max(...am))), cell(n(Math.min(...am))), cell(ds(Math.max(...g.tr.map(t => t[0]))))]; })), LX, y, LW, [3.0, 2.4, 0.7, 0.7, 1.0, 1.1, 1.1, 1.1, 1.13], 8.5, 0.28);
     } else sl.addText(X.err.length ? '분양권 자료를 조회하지 못했습니다: ' + X.err.join(' / ') : `반경 ${radTxt} 안 최근 2년 분양권·입주권 거래가 없습니다.`, { x: LX, y, w: LW, h: 0.28, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true });
 
+    // 분양가 vs 분양권 전매가, 신축·구축 가격 격차
+    {
+      const lcs = (a, b) => { let best = 0; const dp = Array(b.length + 1).fill(0); for (let i = 1; i <= a.length; i++) { let prev = 0; for (let j = 1; j <= b.length; j++) { const tmp = dp[j]; dp[j] = a[i - 1] === b[j - 1] ? prev + 1 : 0; if (dp[j] > best) best = dp[j]; prev = tmp; } } return best; };
+      const pool = []; for (const g of SILVG.values()) { if (codes.has(g.code) || [...codes].some(c => (LEGACY[c] || []).includes(g.code))) pool.push({ name: g.name, umd: g.umd, tr: g.trades.filter(t => t[0] >= cut2) }); }
+      for (const r of rows) { const tr = (SILVC.get(r.c.id) || []).filter(t => t[0] >= cut2); if (tr.length) pool.push({ name: r.c.name, umd: String(r.c.umd).split(' ').pop(), tr }); }
+      const matchSv = (nm, adr) => { const a = nn(nm); let best = null, bs = 0; for (const g of pool) { if (!g.tr.length) continue; const b = nn(g.name), sameDong = g.umd && String(adr).includes(g.umd), L = (a && b) ? (a.includes(b) || b.includes(a) ? Math.min(a.length, b.length) : lcs(a, b)) : 0; if (L >= 4 && (sameDong || L >= 6) && (L > bs || (L === bs && g.tr.length > (best ? best.tr.length : 0)))) { best = g; bs = L; } } return best; };
+      const prem = [];
+      for (const x of sales) { const r0 = x.r0; let ty = '', amt = 0;
+        try { const [mdl] = (await (saleExtra(String(r0.HOUSE_MANAGE_NO)), SALEX.get(String(r0.HOUSE_MANAGE_NO))));
+          if (Array.isArray(mdl) && mdl.length && mdl[0].LTTOT_TOP_AMOUNT !== undefined) { const byS = (a, b) => (+b.SUPLY_HSHLDCO || 0) - (+a.SUPLY_HSHLDCO || 0), m84 = mdl.filter(z => Math.floor(parseFloat(z.HOUSE_TY) + 1e-6) === 84).sort(byS)[0], m0 = m84 || mdl.slice().sort(byS)[0]; amt = +String(m0.LTTOT_TOP_AMOUNT).replace(/,/g, ''); ty = Math.floor(parseFloat(m0.HOUSE_TY) + 1e-6); } } catch (e) {}
+        const g = matchSv(r0.HOUSE_NM, r0.HSSPLY_ADRES), v = g && ty ? g.tr.filter(t => bk(t) === ty) : [];
+        const m = v.length ? med(v.map(t => t[3])) : 0;
+        prem.push({ r0, d: x.d, approx: x.approx, ty, amt, g, v, m, pr: (m && amt) ? m - amt : null, pct: (m && amt) ? (m / amt - 1) * 100 : null, last: v.length ? Math.max(...v.map(t => t[0])) : 0 }); }
+      // 신축·구축 가격 격차 (반경 내 전체 단지, 같은 전용 84㎡·59㎡, 최근 1년)
+      const grp = (test, k) => { const ps = rows.filter(r => r.year && test(Y - r.year)).flatMap(r => r.tr.filter(t => t[0] >= cut1 && bk(t) === k).map(t => [r, t])); return { n: ps.length, cx: new Set(ps.map(([r]) => r.c.id)).size, m: ps.length ? med(ps.map(([r, t]) => t[3])) : 0, pp: ps.length ? med(ps.map(([r, t]) => ppy(r, t))) : 0 }; };
+      const isNew = a => a <= 5, isOld = a => a > 10, K = [84, 59];
+      const gap = K.map(k => { const a = grp(isNew, k), b = grp(isOld, k); return { k, a, b, ok: a.n >= 3 && b.n >= 3, x: a.m && b.m ? a.m / b.m : 0, xp: a.pp && b.pp ? a.pp / b.pp : 0 }; });
+      const g0 = gap.find(z => z.ok) || null, withTr = prem.filter(z => z.v.length), pv = withTr.filter(z => z.pr != null);
+      sl = page(g0 ? `반경 ${radTxt} 신축(5년 이내)은 구축(10년 초과)의 ${g0.x.toFixed(2)}배 · ${g0.k}㎡ 중위 실거래가 기준` : '신축·구축 가격 격차는 표본이 부족해 계산하지 못했습니다',
+        'NEW VS OLD · PRESALE PREMIUM');
+      const kg2 = 0.21, kw2 = (LW - kg2 * 2) / 3;
+      gap.forEach((z, i) => { kpi(sl, LX + (kw2 + kg2) * i, 1.4, kw2, `${z.k}㎡ 신축 / 구축 중위 실거래가`, z.ok ? `${n(z.a.m)} / ${n(z.b.m)}만원` : '표본 부족',
+        z.ok ? `신축 ${z.a.n}건·${z.a.cx}개 단지 / 구축 ${z.b.n}건·${z.b.cx}개 단지 · 평당가 ${z.xp.toFixed(2)}배` : `신축 ${z.a.n}건 / 구축 ${z.b.n}건 (각 3건 이상 필요)`); });
+      { const pm = pv.length ? med(pv.map(z => z.pr)) : null; kpi(sl, LX + (kw2 + kg2) * 2, 1.4, kw2, '분양권 전매 프리미엄 중위', pm == null ? '-' : `${pm >= 0 ? '+' : ''}${n(pm)}만원`, pv.length ? `분양 ${prem.length}건 중 ${pv.length}건에서 전매 확인` : '전매 거래가 확인된 분양 단지 없음'); }
+      sl.addText(`분양가 대비 분양권 전매가 (분양 사례의 ${prem[0] && prem[0].ty ? '대표 주택형' : '주택형'} 최고 분양가 대비 · 만원)`, { x: LX, y: 2.75, w: LW, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
+      if (prem.length) { const rr = prem.map((z, i) => [cell(String.fromCharCode(65 + i), { bold: true, color: 'E8710A' }), cell(z.r0.HOUSE_NM || '', { align: 'left', bold: true }), cell(z.r0.RCRIT_PBLANC_DE || '-'), cell(z.r0.MVN_PREARNGE_YM || '-'), cell(z.ty ? z.ty + '㎡' : '-'), cell(z.amt ? n(z.amt) : '-'), cell(z.v.length ? z.v.length : (z.g ? '0' : '-')),
+        cell(z.m ? n(z.m) : '-', z.m ? { bold: true, color: NAVY } : {}), cell(z.pr != null ? (z.pr >= 0 ? '+' : '') + n(z.pr) : '-', z.pr != null ? { bold: true, fill: { color: GOLDBG } } : {}), cell(z.pct != null ? (z.pct >= 0 ? '+' : '') + z.pct.toFixed(1) + '%' : '-'), cell(z.last ? ds(z.last) : '-'),
+        cell(z.v.length ? '' : (z.g ? '같은 타입 거래 없음' : '전매 거래 없음/미확인'), { align: 'left' })]);
+        tbl(sl, [['', '단지명', '모집공고일', '입주예정', '타입', '최고 분양가', '전매 건수', '전매 중위가', '프리미엄', '%', '최근 전매', '비고'].map(TH)].concat(rr.slice(0, 9)), LX, 3.05, LW, [0.4, 2.45, 0.95, 0.85, 0.65, 1.05, 0.75, 1.05, 0.95, 0.7, 0.85, 1.12], 8.5, 0.3); }
+      else sl.addText(saleNote || '비교할 분양 사례가 없습니다.', { x: LX, y: 3.1, w: LW, h: 0.28, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true });
+      sl.addText(['보는 법: 프리미엄 = 같은 전용면적대 분양권 전매 중위가 − 청약홈 최고 분양가. 최고가는 고층 기준이라 실제 분양가보다 높아, 프리미엄은 실제보다 작게 나올 수 있습니다. 발코니 확장·옵션 비용은 분양가에 포함되지 않아 전매가와 섞일 수 있습니다.',
+        '분양권 단지는 국토부 신고명과 청약홈 단지명이 달라, 같은 동에서 이름이 4자 이상 겹치는 것을 같은 단지로 보았습니다. 맞는 단지를 못 찾았거나 시군구 자료가 없으면 "전매 거래 없음/미확인"으로 표시했습니다.',
+        `신축·구축 격차는 반경 ${radTxt} 안 전체 단지 중 준공연도를 확인한 단지만 썼고, 대상지와 생활권(학군·역·경계)이 다른 단지가 섞일 수 있어 지도로 확인이 필요합니다.${pv.length ? '' : ' 이번 자료는 프리미엄을 계산할 전매 거래가 없었습니다.'}`].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
+        { x: LX, y: 5.95, w: LW, h: 1.0, fontFace: F, fontSize: 8.5, color: MUTE, margin: 0, valign: 'top', paraSpaceAfter: 3, isTextBox: true, fit: 'shrink' });
+    }
+
     // 기준과 한계
     sl = page('이 자료의 기준과 한계', 'METHODOLOGY');
     sl.addShape(pres.ShapeType.rect, { x: LX - 0.12, y: 1.3, w: LW + 0.24, h: 5.62, fill: { color: BG }, line: { color: BG, width: 0 } });
@@ -818,6 +854,7 @@ async function makeReport() {
       det.length > 20 ? `단지별 상세는 20개까지만 넣었습니다 (전체 ${det.length}개는 요약표 참조).` : '',
       '분양 자료는 청약홈 아파트 분양공고 기준이며, 오피스텔·도시형생활주택과 무순위·임의공급 별도 공고는 포함하지 않았습니다. 분양권 거래는 국토부 신고 자료입니다.',
       '분양 사례의 분양가는 84㎡ 주택형(없으면 공급세대가 가장 많은 주택형)의 최고 분양가입니다. 층별 분양가, 발코니 확장비, 중도금 조건은 모집공고문 분석이 필요합니다.',
+      '신축/구축 격차 쪽: 신축은 준공 5년 이내, 구축은 준공 10년 초과로 나눠 같은 전용면적(84㎡·59㎡) 최근 1년 중위가를 비교했고, 분양가 대비 전매 프리미엄은 같은 전용면적대 전매 중위가에서 청약홈 최고 분양가를 뺀 추정값입니다.',
       '인구·세대, 미분양, 인허가 등 통계와 적정 분양가 검토는 이 자료에 없습니다.'].filter(Boolean).map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
       { x: LX + 0.12, y: 1.45, w: LW - 0.24, h: 5.35, fontFace: F, fontSize: 11, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 7, isTextBox: true, fit: 'shrink' });
 
