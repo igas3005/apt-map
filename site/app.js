@@ -186,7 +186,7 @@ async function fetchBld(c) {
   if (!kaptErr) { try { const k = await fetchKapt(c, rc); if (k) return k; } catch (e) { kaptErr = e; } }
   return fetchLedger(c, rc);
 }
-async function fetchLedger(c, rc) {
+async function fetchLedger(c, rc, purp) {
   const m = c.jibun.match(/^(산)?(\d+)(?:-(\d+))?$/); if (!m) return 0;
   let key = KEY; try { key = decodeURIComponent(KEY); } catch (e) {}
   const rows = [];
@@ -202,10 +202,11 @@ async function fetchLedger(c, rc) {
     const rcode = g('resultCode'); if (rcode && rcode !== '00' && rcode !== '000') throw { kind: 'api', msg: rcode + ' ' + g('resultMsg') };
     const items = [...doc.getElementsByTagName('item')];
     for (const it of items) { const v = t => { const e = it.getElementsByTagName(t)[0]; return e ? e.textContent.trim() : ''; };
-      rows.push({ main: v('mainAtchGbCd') !== '1', hh: +v('hhldCnt') || 0, up: +v('grndFlrCnt') || 0, dn: +v('ugrndFlrCnt') || 0, y: +(v('useAprDay').slice(0, 4)) || 0 }); }
+      rows.push({ main: v('mainAtchGbCd') !== '1', pu: v('mainPurpsCdNm') + ' ' + v('etcPurps'), hh: +v('hhldCnt') || +v('hoCnt') || 0, up: +v('grndFlrCnt') || 0, dn: +v('ugrndFlrCnt') || 0, y: +(v('useAprDay').slice(0, 4)) || 0 }); }
     if (page * 100 >= (+g('totalCount') || 0) || !items.length) break;
   }
   let use = rows.filter(x => x.main && x.hh > 0); if (!use.length) use = rows.filter(x => x.main); if (!use.length) return 0;
+  if (purp) { const pr = use.filter(x => x.pu.includes(purp) || x.pu.includes('오피스텔')); if (pr.length) use = pr; }   // 오피스텔: 같은 지번의 아파트·상가 동은 빼고 업무시설(오피스텔) 동만 합산
   const ys = use.map(x => x.y).filter(y => y > 1900);
   return [use.reduce((a, x) => a + x.hh, 0), ys.length ? Math.min(...ys) : 0, Math.max(...use.map(x => x.up)), Math.max(...rows.map(x => x.dn)), use.filter(x => x.hh > 0).length];  // 지하층은 지하주차장 등 세대 없는 동·부속건축물까지 포함해 최댓값
 }
@@ -331,7 +332,7 @@ async function odGet(path, cond) {
   const j = await r.json(); return Array.isArray(j.data) ? j.data : [];
 }
 // 청약홈 분양정보: 시도 단위로 받아 둔다. 조건 검색이 거절되면 조건 없이 받아 화면에서 거른다.
-const ST = { meta: '', log: '', sido: '서울', q: '', years: 2, rows: null, err: null, loading: false, init: false, diag: '' };
+const ST = { meta: '', log: '', sido: '서울', q: '', years: 2, rows: null, err: null, loading: false, init: false, diag: '', ot: '' };
 const SALEROW = new Map(); let salePin = null;
 async function odPages(path, cond, maxPages) {
   let key = KEY; try { key = decodeURIComponent(KEY); } catch (e) {}
@@ -346,18 +347,22 @@ async function odPages(path, cond, maxPages) {
   }
   return all;
 }
+const saleKey = sido => (S.asset === 'offi' ? 'o|' : '') + sido;
+const rowId = r => (r._o ? 'o' : '') + r.HOUSE_MANAGE_NO;
+// 오피스텔·도시형·생활숙박시설 분양정보 경로 (청약홈 'Urbty Ofctl' 계열). 이름이 다르면 오류 문구에 경로가 나온다.
+const OFFI_SALE = { detail: 'ApplyhomeInfoDetailSvc/v1/getUrbtyOfctlLttotPblancDetail', mdl: 'ApplyhomeInfoDetailSvc/v1/getUrbtyOfctlLttotPblancMdl', cmp: 'ApplyhomeInfoCmpetRtSvc/v1/getUrbtyOfctlLttotPblancCmpet' };
 function salesOf(sido) {
-  const k = sido;
+  const offi = S.asset === 'offi', k = saleKey(sido);
   if (!SALES.has(k)) { const d = new Date(S.asOf.getFullYear() - 3, S.asOf.getMonth(), S.asOf.getDate());
     const from = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-    const path = 'ApplyhomeInfoDetailSvc/v1/getAPTLttotPblancDetail';
+    const path = offi ? OFFI_SALE.detail : 'ApplyhomeInfoDetailSvc/v1/getAPTLttotPblancDetail';
     const local = rows => rows.filter(r => String(r.SUBSCRPT_AREA_CODE_NM || r.HSSPLY_ADRES || '').includes(sido) && String(r.RCRIT_PBLANC_DE || '') >= from);
     // 조건 검색이 거절되거나 0건이면 조건을 줄여 다시 받고 화면에서 거른다
     SALES.set(k, (async () => {
       const tries = [[{ 'SUBSCRPT_AREA_CODE_NM::EQ': sido, 'RCRIT_PBLANC_DE::GTE': from }, 6], [{ 'RCRIT_PBLANC_DE::GTE': from }, 12], [{}, 20]]; let last = null, log = [];
       for (const [cond, pages] of tries) {
-        try { const rows = local(await odPages(path, cond, pages)); log.push(Object.keys(cond).length + '개 조건 → ' + rows.length + '건 (' + ST.meta + ')'); if (rows.length) { ST.log = log.join(' / '); return rows; } }
-        catch (e) { if (e.kind !== 'api') throw e; last = e; log.push(Object.keys(cond).length + '개 조건 → 오류 ' + (e.msg || '')); }
+        try { const rows = local(await odPages(path, cond, pages)); if (offi) rows.forEach(r => { r._o = 1; }); log.push(Object.keys(cond).length + '개 조건 → ' + rows.length + '건 (' + ST.meta + ')'); if (rows.length) { ST.log = log.join(' / '); return rows; } }
+        catch (e) { if (e.kind !== 'api') throw e; last = e; log.push(Object.keys(cond).length + '개 조건 → 오류 ' + (e.msg || '') + (offi ? ' [' + path.split('/').pop() + ']' : '')); }
       }
       ST.log = log.join(' / '); SALES.delete(k); if (last && log.every(x => x.includes('오류'))) throw last; return [];
     })()
@@ -367,11 +372,11 @@ function salesOf(sido) {
 async function loadSaleTab() {
   if (!KEY) { ST.rows = null; ST.err = null; renderSaleList(); return; }
   ST.loading = true; ST.err = null; renderSaleList();
-  const sido = ST.sido;
-  try { const rows = await salesOf(sido); if (sido !== ST.sido) return;
+  const sido = ST.sido, asset = S.asset;
+  try { const rows = await salesOf(sido); if (sido !== ST.sido || asset !== S.asset) return;
     ST.diag = rows.length && rows[0].HOUSE_NM === undefined ? '응답 항목이 예상과 달라요: ' + Object.keys(rows[0]).slice(0, 14).join(', ') : '';
     ST.rows = rows.slice().sort((a, b) => String(b.RCRIT_PBLANC_DE || '').localeCompare(String(a.RCRIT_PBLANC_DE || '')));
-    for (const r of rows) SALEROW.set(String(r.HOUSE_MANAGE_NO), r);
+    for (const r of rows) SALEROW.set(rowId(r), r);
   } catch (e) { ST.rows = null; ST.err = e.kind === 'net' ? '청약홈 서버에 접속하지 못했어요 (브라우저 보안 정책 또는 네트워크 차단).' : (e.kind === 'key' ? '청약홈 API 인증이 거절됐어요 (' + (e.msg || '') + '). 활용신청 승인이 반영됐는지 확인하세요.' : '청약홈 조회 오류: ' + (e.msg || '')); }
   ST.loading = false; renderSaleList();
 }
@@ -379,17 +384,19 @@ function renderSaleTab() {
   const el = $('#list');
   el.innerHTML = `<div class="lh"><div class="ctrl" style="margin:0"><label>시도<select id="ssido">${['서울', '경기', '인천'].map(x => `<option${x === ST.sido ? ' selected' : ''}>${x}</option>`).join('')}</select></label>
     <label>기간<select id="syears">${[1, 2, 3].map(y => `<option value="${y}"${y === ST.years ? ' selected' : ''}>최근 ${y}년</option>`).join('')}</select></label>
-    <label>시군구·단지명<input id="sq" type="search" placeholder="예: 용인, 처인구" value="${esc(ST.q)}" style="padding:6px 8px;font-size:13px"></label></div></div><div id="slist"></div>`;
+    <label>시군구·단지명<input id="sq" type="search" placeholder="예: 용인, 처인구" value="${esc(ST.q)}" style="padding:6px 8px;font-size:13px"></label>${S.asset === 'offi' ? `<label>유형<select id="sot">${[['', '전체'], ['오피스텔', '오피스텔'], ['생활숙박', '생활숙박시설'], ['도시형', '도시형생활주택'], ['임대', '민간임대']].map(x => `<option value="${x[0]}"${x[0] === ST.ot ? ' selected' : ''}>${x[1]}</option>`).join('')}</select></label>` : ''}</div></div><div id="slist"></div>`;
   $('#ssido').onchange = () => { ST.sido = $('#ssido').value; loadSaleTab(); };
   $('#syears').onchange = () => { ST.years = +$('#syears').value; renderSaleList(); };
   $('#sq').oninput = () => { ST.q = $('#sq').value.trim(); renderSaleList(); };
+  if ($('#sot')) $('#sot').onchange = () => { ST.ot = $('#sot').value; renderSaleList(); };
   renderSaleList();
 }
+const typeOf = r => String(r.HOUSE_DTL_SECD_NM || r.HOUSE_SECD_NM || '');   // 세부 구분(오피스텔·생활숙박시설…)이 있으면 그것을, 없으면 큰 구분을 쓴다
 function renderSaleList() {
   const el = document.getElementById('slist'); if (!el || S.tab !== 'sale') return;
   let h = '';
-  if (NOTICES.length) h += '<details class="nbox"><summary>분석해 둔 모집공고 요약·PPT ' + NOTICES.length + '건 보기</summary>' + NOTICES.map(n => `<div class="item nitem" data-nid="${esc(n.id)}"><div class="n"><div class="nm">${esc(n.name)}</div><div class="ad">${esc(n.addr)} · 공고 ${esc(n.noticeDate)}</div></div><div class="px"><small>요약·PPT</small></div></div>`).join('') + '</details>';
-  h += '<div class="lh"><button id="sre" style="float:right;padding:2px 9px;font-size:12px">다시 조회</button><b>청약홈 분양정보</b> ';
+  if (NOTICES.length && S.asset === 'apt') h += '<details class="nbox"><summary>분석해 둔 모집공고 요약·PPT ' + NOTICES.length + '건 보기</summary>' + NOTICES.map(n => `<div class="item nitem" data-nid="${esc(n.id)}"><div class="n"><div class="nm">${esc(n.name)}</div><div class="ad">${esc(n.addr)} · 공고 ${esc(n.noticeDate)}</div></div><div class="px"><small>요약·PPT</small></div></div>`).join('') + '</details>';
+  h += '<div class="lh"><button id="sre" style="float:right;padding:2px 9px;font-size:12px">다시 조회</button><b>청약홈 분양정보' + (S.asset === 'offi' ? ' (오피스텔·도시형·생활숙박)' : '') + '</b> ';
   if (!KEY) h += '</div><div class="empty">국토부 인증키를 입력하면 조회돼요.</div>';
   else if (ST.loading) h += '조회 중…</div>';
   else if (ST.err) h += `</div><div class="status err" style="margin:10px 14px">${esc(ST.err)} 이 문구를 그대로 알려 주세요.</div>`;
@@ -398,23 +405,23 @@ function renderSaleList() {
     const toks = ST.q.split(/\s+/).filter(Boolean);
     const yd = new Date(S.asOf.getFullYear() - ST.years, S.asOf.getMonth(), S.asOf.getDate()), yfrom = yd.getFullYear() + '-' + String(yd.getMonth() + 1).padStart(2, '0') + '-' + String(yd.getDate()).padStart(2, '0');
     const inYears = ST.rows.filter(r => String(r.RCRIT_PBLANC_DE || '') >= yfrom);
-    const rows = inYears.filter(r => { const t = String(r.HOUSE_NM || '') + ' ' + String(r.HSSPLY_ADRES || ''); return toks.every(x => t.includes(x)); });
+    const rows = inYears.filter(r => { const t = String(r.HOUSE_NM || '') + ' ' + String(r.HSSPLY_ADRES || ''); return toks.every(x => t.includes(x)) && (S.asset !== 'offi' || !ST.ot || typeOf(r).includes(ST.ot)); });
     h += `${ST.sido} 최근 ${ST.years}년 ${inYears.length}건${toks.length ? ' 중 ' + rows.length + '건' : ''} <small>(받은 자료: 최근 3년 ${ST.rows.length}건)</small></div>`;
     if (ST.diag) h += `<div class="status err" style="margin:10px 14px">${esc(ST.diag)} 이 문구를 그대로 알려 주세요.</div>`;
     if (!rows.length) h += '<div class="empty">조건에 맞는 공고가 없어요.</div>';
     if (!ST.rows.length && ST.log) h += `<div class="status err" style="margin:10px 14px">청약홈 서버가 지금 자료를 한 건도 주지 않고 있어요 (조건 없이 물어도 0건). 서버 쪽 일시 현상일 수 있으니 잠시 뒤 '다시 조회'를 눌러 보세요.<br><small>진단: ${esc(ST.log)}</small></div>`;
-    h += rows.slice(0, 200).map(r => { const id = String(r.HOUSE_MANAGE_NO), an = NOTICES.some(n => n.id === id);
-      return `<div class="item${xsel === 's' + id ? ' sel' : ''}" data-sid="${esc(id)}"><div class="n"><div class="nm">${esc(r.HOUSE_NM || '(이름 없음)')}</div><div class="ad">${esc(r.HSSPLY_ADRES || '')}</div><div class="inf">공고 ${esc(r.RCRIT_PBLANC_DE || '-')} · ${esc(r.TOT_SUPLY_HSHLDCO == null ? '-' : r.TOT_SUPLY_HSHLDCO)}세대${r.MVN_PREARNGE_YM ? ' · 입주 ' + esc(r.MVN_PREARNGE_YM) : ''}</div></div><div class="px"><small>${an ? '분석 요약 있음' : '경쟁률'}</small></div></div>`; }).join('');
+    h += rows.slice(0, 200).map(r => { const id = rowId(r), an = NOTICES.some(n => n.id === id);
+      return `<div class="item${xsel === 's' + id ? ' sel' : ''}" data-sid="${esc(id)}"><div class="n"><div class="nm">${esc(r.HOUSE_NM || '(이름 없음)')}</div><div class="ad">${esc(r.HSSPLY_ADRES || '')}</div><div class="inf">${r._o && typeOf(r) ? esc(typeOf(r)) + ' · ' : ''}공고 ${esc(r.RCRIT_PBLANC_DE || '-')} · ${esc(r.TOT_SUPLY_HSHLDCO == null ? '-' : r.TOT_SUPLY_HSHLDCO)}${r._o ? '실' : '세대'}${r.MVN_PREARNGE_YM ? ' · 입주 ' + esc(r.MVN_PREARNGE_YM) : ''}</div></div><div class="px"><small>${an ? '분석 요약 있음' : '경쟁률'}</small></div></div>`; }).join('');
     if (rows.length > 200) h += '<div class="lh">최근 200건만 표시했어요. 시군구나 단지명으로 좁혀 보세요.</div>';
   }
   el.innerHTML = h;
-  const re = document.getElementById('sre'); if (re) re.onclick = () => { SALES.delete(ST.sido); loadSaleTab(); };
+  const re = document.getElementById('sre'); if (re) re.onclick = () => { SALES.delete(saleKey(ST.sido)); loadSaleTab(); };
 }
 function setTab(t) {
   S.tab = t; document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   $('.ctrl').style.display = t === 'sale' ? 'none' : '';
   if (t === 'sale') {
-    if (!ST.init) { ST.init = true; const c = S.list.length ? C[S.list[0].id] : null; if (c) { ST.sido = c.sido; ST.q = c.gu.split(' ')[0].replace(/시$|구$/, ''); } }
+    if (!ST.init) { ST.init = true; const c = S.asset === 'apt' && S.list.length ? C[S.list[0].id] : null; if (c) { ST.sido = c.sido; ST.q = c.gu.split(' ')[0].replace(/시$|구$/, ''); } }
     renderSaleTab(); if (!ST.rows && !ST.loading) loadSaleTab();
   } else renderList();
 }
@@ -444,11 +451,12 @@ async function loadExtras(tok) {
 function silvBest(tr) { const b = dominant(tr); const latest = b.v.reduce((x, y) => (y[0] > x[0] ? y : x)); return { py: pyeong(b.k), val: latest[3], n: tr.length }; }
 function renderExtraPins() {
   XOV.forEach(o => o.setMap(null)); XOV = [];
-  if (!map || S.asset === 'offi') return;
+  if (!map) return;
   const add = (lat, lon, cls, html, title, fn, z) => { const el = document.createElement('div'); el.className = 'pin ' + cls; el.innerHTML = html; el.title = title;
     el.addEventListener('click', e => { e.stopPropagation(); fn(); });
     const ov = new kakao.maps.CustomOverlay({ position: new kakao.maps.LatLng(lat, lon), content: el, xAnchor: .12, yAnchor: 1, zIndex: z, clickable: true }); ov.setMap(map); XOV.push(ov); };
   if (salePin) add(salePin.lat, salePin.lon, 'spin sel', `<small>분양 ${esc(salePin.date)}</small><b>${esc(salePin.name.length > 12 ? salePin.name.slice(0, 12) + '…' : salePin.name)}</b>`, salePin.name, () => openSale(salePin.id), 25);
+  if (S.asset === 'offi') return;
   for (const g of X.silv) { const b = silvBest(g.trades);
     add(g.lat, g.lon, 'vpin' + (xsel === 'v' + g.key ? ' sel' : ''), `<small>분양권 ${b.py}평</small><b>${eok(b.val)}</b>`, g.name, () => openSilv(g.key), 22); }
 }
@@ -458,11 +466,12 @@ function silvTable(tr) {
 }
 function rawTable(rows) { if (!rows.length) return ''; const ks = Object.keys(rows[0]);
   return '<div class="note">항목 이름이 예상과 달라 원자료 그대로 표시해요. 이 표를 알려 주세요.</div><div style="overflow:auto"><table><tr>' + ks.map(k => `<th>${esc(k)}</th>`).join('') + '</tr>' + rows.slice(0, 30).map(r => '<tr>' + ks.map(k => `<td>${esc(r[k] == null ? '' : r[k])}</td>`).join('') + '</tr>').join('') + '</table></div>'; }
-async function saleExtra(id) {       // 주택형별 공급·최고분양가 + 경쟁률
+async function saleExtra(id, offi) {       // 주택형별 공급·최고분양가 + 경쟁률
   if (!KEY) return '<div class="note">국토부 인증키를 입력하면 청약 경쟁률이 표시돼요.</div>';
+  const raw = String(id).replace(/^o/, '');
   if (!SALEX.has(id)) SALEX.set(id, Promise.all([
-    odGet('ApplyhomeInfoDetailSvc/v1/getAPTLttotPblancMdl', { 'HOUSE_MANAGE_NO::EQ': id }).catch(e => ({ err: e })),
-    odGet('ApplyhomeInfoCmpetRtSvc/v1/getAPTLttotPblancCmpet', { 'HOUSE_MANAGE_NO::EQ': id }).catch(e => ({ err: e }))]));
+    odGet(offi ? OFFI_SALE.mdl : 'ApplyhomeInfoDetailSvc/v1/getAPTLttotPblancMdl', { 'HOUSE_MANAGE_NO::EQ': raw }).catch(e => ({ err: e })),
+    odGet(offi ? OFFI_SALE.cmp : 'ApplyhomeInfoCmpetRtSvc/v1/getAPTLttotPblancCmpet', { 'HOUSE_MANAGE_NO::EQ': raw }).catch(e => ({ err: e }))]));
   const [mdl, cmp] = await SALEX.get(id); const num = v => (v == null || v === '') ? '-' : (isNaN(+String(v).replace(/,/g, '')) ? esc(v) : Number(String(v).replace(/,/g, '')).toLocaleString('ko-KR'));
   const er = e => `<div class="note">조회 실패 (${esc(e.kind || '')} ${esc(e.msg || '')}). 활용신청 승인 반영 전이거나 브라우저 접속이 막혔을 수 있어요.</div>`;
   let h = '<div class="sec">주택형별 공급 (청약홈)</div>';
@@ -494,13 +503,14 @@ async function openSale(id) {
     const done = ok => { $('#rqo').innerHTML = (ok ? '<b>요청 문구를 복사했어요.</b> ' : '<b>아래 문구를 복사하세요.</b> ') + 'Claude 대화창에 붙여넣고, 청약홈에서 받은 공고문 PDF를 함께 첨부해 보내면 돼요. 완성되면 이 단지에 "분석 요약"이 붙어요.' +
       ` <a href="https://claude.ai" target="_blank" rel="noopener">Claude 열기</a><textarea readonly style="width:100%;height:110px;margin-top:6px;font:12px/1.4 inherit">${esc(txt)}</textarea>`; };
     try { navigator.clipboard.writeText(txt).then(() => done(true), () => done(false)); } catch (e) { done(false); } };
-  saleExtra(id).then(ex => { const sx = document.getElementById('sx'); if (sx && xsel === 's' + id) sx.innerHTML = ex; });
+  saleExtra(id, !!r._o).then(ex => { const sx = document.getElementById('sx'); if (sx && xsel === 's' + id) sx.innerHTML = ex; });
   // 위치를 찾아 지도 이동, 그 시군구의 분양권·입주권 거래 중 이름이 맞는 것을 붙인다
   const g = await geocodeSale(addr, name); if (xsel !== 's' + id) return;
   const sv = document.getElementById('sv');
   if (!g) { if (sv) sv.innerHTML = '<div class="note">주소로 위치를 찾지 못해 지도에는 표시하지 못했어요.</div>'; return; }
   salePin = { id, name, lat: g[0], lon: g[1], date: String(r.RCRIT_PBLANC_DE || '').slice(2, 7) }; renderExtraPins();
   map.setLevel(5); map.panTo(new kakao.maps.LatLng(g[0], g[1]));
+  if (r._o) { if (sv) sv.innerHTML = '<div class="note">오피스텔은 분양권 전매 실거래 공개 자료가 없어요. 분양가는 청약홈 주택형별 최고가 기준이에요.</div>'; return; }
   const b = await new Promise(res => geocoder.coord2RegionCode(g[1], g[0], (rr, st) => { if (st !== kakao.maps.services.Status.OK) return res(null); res(rr.find(x => x.region_type === 'B') || null); }));
   if (!b || !b.code || xsel !== 's' + id) return;
   const c5 = String(b.code).slice(0, 5); X.err = []; await ensureSilv(new Set([c5])); if (xsel !== 's' + id) return;
@@ -966,6 +976,28 @@ async function locateOffi(codes, tok) {
   for (const g of near) { if (!g.p) { miss++; continue; } const d = hav(S.center.lat, S.center.lon, g.p[0], g.p[1]); if (d <= S.rad) out.push({ g, d }); }
   return { out, miss };
 }
+const obkey = g => 'o|' + bkey(g);
+function offiInfo(g) {
+  const b = BLD[obkey(g)], parts = [], y = (b && b[1]) || g.by;
+  if (b && b[0]) parts.push(b[0].toLocaleString('ko-KR') + '호(실)');
+  if (y) parts.push(y + '년');
+  if (b && b[2]) parts.push((b[3] ? `지하${b[3]}/` : '') + `지상${b[2]}층`);
+  return parts.join(' · ');
+}
+async function loadOffiBld(tok) {                // 건축물대장 표제부로 호(실)수·층수를 채운다 (가까운 80곳)
+  if (!KEY || bldErr || !geocoder) return;
+  const todo = OF.list.slice(0, 80).map(i => i.g).filter(g => BLD[obkey(g)] === undefined);
+  if (!todo.length) return;
+  let k = 0, last = 0;
+  const worker = async () => { while (k < todo.length && tok === S.token && !bldErr) { const g = todo[k++];
+    try { const rc = await regionCode({ lat: g.p[0], lon: g.p[1] }); BLD[obkey(g)] = (rc && rc.length >= 10) ? await fetchLedger(g, rc, '업무') : 0; bldSave(); }
+    catch (e) { if (e.kind === 'key' || e.kind === 'net') bldErr = e; }
+    if (tok === S.token && Date.now() - last > 500) { last = Date.now(); renderOffiList(); } } };
+  await Promise.all(Array.from({ length: 4 }, worker));
+  if (tok !== S.token) return;
+  renderOffiList(); if (OF.sel) renderOffiDetail();
+  if (bldErr) status(bldErr.kind === 'key' ? '호(실)수·층수(건축물대장) 조회가 거절됐어요 (' + (bldErr.msg || '') + '). 활용신청 승인이 반영되지 않았을 수 있어요.' : '건축물대장 API에 접속하지 못했어요. 이 문구를 그대로 알려 주세요.', true);
+}
 function offiErrText(e) {
   if (e.kind === 'net') return '브라우저에서 국토부 API에 접속하지 못했어요. 브라우저 보안 정책(CORS)이나 사내 네트워크 차단일 수 있어요. 이 문구를 그대로 알려 주세요.';
   if (e.kind === 'key') return '오피스텔 매매 실거래 조회 권한 오류예요 (' + (e.msg || '') + '). 공공데이터포털에서 「국토교통부_오피스텔 매매 실거래가 자료」 활용신청이 승인됐는지 확인하세요. 승인 직후에는 반영에 시간이 걸릴 수 있어요.';
@@ -987,6 +1019,7 @@ async function refreshOffi(fit) {
   OF.loading = false; OF.list = out;
   status(miss ? `지번으로 위치를 찾지 못한 ${miss}곳은 제외했어요.` : '');
   recomputeOffi(); if (fit && circle) map.setBounds(circle.getBounds());
+  loadOffiBld(tok);
 }
 function offiSum(g) {
   const cut = cutoff(), b = obandOf(), arr = g.trades.filter(t => t[0] >= cut && t[1] >= b.a && t[1] < b.b);
@@ -1028,7 +1061,7 @@ function renderOffiList() {
   if (!n) h += `<div class="empty">${OF.loading ? '오피스텔을 찾는 중이에요…' : '이 반경에서 최근 거래된 오피스텔이 없어요.<br>반경이나 기간을 늘려 보세요.'}</div>`;
   h += OF.list.slice(0, 300).map(it => { const g = it.g, s = OF.sum.get(g.key);
     const px = s ? `<div class="px"><b>${eok(s.val)}</b><small>전용 ${s.type}㎡ · ${s.cnt}건</small></div>` : '<div class="px"><small>거래 없음</small></div>';
-    return `<div class="item${OF.sel === g.key ? ' sel' : ''}" data-oid="${esc(g.key)}"><div class="n"><div class="nm">${esc(g.name)}</div><div class="ad">${esc(g.umd)} ${esc(g.jibun)} · ${it.d < 1000 ? Math.round(it.d) + 'm' : (it.d / 1000).toFixed(2) + 'km'}</div>${g.by ? `<div class="inf">${g.by}년 준공</div>` : ''}</div>${px}</div>`; }).join('');
+    return `<div class="item${OF.sel === g.key ? ' sel' : ''}" data-oid="${esc(g.key)}"><div class="n"><div class="nm">${esc(g.name)}</div><div class="ad">${esc(g.umd)} ${esc(g.jibun)} · ${it.d < 1000 ? Math.round(it.d) + 'm' : (it.d / 1000).toFixed(2) + 'km'}</div>${offiInfo(g) ? `<div class="inf">${offiInfo(g)}</div>` : ''}</div>${px}</div>`; }).join('');
   el.innerHTML = h;
 }
 function openOffi(key, pan) {
@@ -1044,7 +1077,7 @@ function renderOffiDetail() {
   const types = new Map(); for (const t of all) { const k = fl2(t[1]); types.set(k, (types.get(k) || 0) + 1); }
   if (OF.dtype == null) { const dom = dominant(all.filter(t => t[1] >= b.a && t[1] < b.b), true) || dominant(all, true); OF.dtype = dom ? dom.k : 'all'; }
   const arr = OF.dtype === 'all' ? all : all.filter(t => fl2(t[1]) === OF.dtype);
-  let h = `<button class="x" id="dx">닫기</button><h2>${esc(g.name)}</h2><div class="ad">${esc(g.umd)} ${esc(g.jibun)}${g.by ? '<br>' + g.by + '년 준공' : ''} · 오피스텔</div>`;
+  let h = `<button class="x" id="dx">닫기</button><h2>${esc(g.name)}</h2><div class="ad">${esc(g.umd)} ${esc(g.jibun)} · 오피스텔${offiInfo(g) ? '<br>' + offiInfo(g) : ''}</div>`;
   if (!all.length) h += `<div class="note">최근 ${S.months}개월 거래가 없어요. 기간을 늘려 보세요.</div>`;
   else {
     h += '<div class="chips">' + [...types.keys()].sort((a, c) => a - c).map(k => `<button data-t="${k}" class="${OF.dtype === k ? 'on' : ''}">전용 ${k}㎡ ${types.get(k)}</button>`).join('') +
@@ -1068,12 +1101,12 @@ function setAsset(a) {
   if (!FOOT0) FOOT0 = $('#foot').textContent;
   $('#foot').textContent = offi ? '국토교통부 오피스텔 매매 실거래가를 실시간 조회 · 해제 거래 제외 · 신고 지번을 좌표로 바꿔 표시(위치 약간 오차 가능) · 참고용' : FOOT0;
   $('#band').innerHTML = (offi ? OBANDS : BANDS).map(b => `<option value="${b.k}">${b.t}</option>`).join(''); S.band = 'all'; $('#band').value = 'all';
-  if (offi && S.tab === 'sale') setTab('trade');
-  document.querySelector('.tabs').style.display = offi ? 'none' : '';
+  const tb = document.querySelectorAll('.tabs button'); tb[0].textContent = offi ? '실거래 (매매)' : '실거래 (매매·분양권·입주권)'; tb[1].textContent = offi ? '분양정보 (청약홈)' : '분양정보 (청약홈·분석)';
+  ST.rows = null; ST.err = null; ST.init = false; salePin = null;
   for (const id of ['rpt', 'rfl']) { const e = document.getElementById(id); if (e) e.style.display = offi ? 'none' : ''; }
   S.sel = null; OF.sel = null; xsel = null; noticeSel = null; $('#detail').hidden = true;
   renderPins(); renderExtraPins(); renderNoticePins();
-  if (S.center) refresh(false); else renderList();
+  if (S.tab === 'sale') { renderSaleTab(); loadSaleTab(); } else if (S.center) refresh(false); else renderList();
 }
 
 /* ---------- 지도 ---------- */
