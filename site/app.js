@@ -621,25 +621,32 @@ async function makeReport() {
     status('기초자료 준비 중… PPT 작성');
     await loadScript('https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js');
     const pres = new PptxGenJS(); pres.layout = 'LAYOUT_WIDE'; pres.title = '공동주택 시장조사 기초자료';   // 13.33 x 7.5 in
-    const F = '맑은 고딕', NAVY = '12263F', INK = '1B2430', MUTE = '6B7785', LINE = 'D5DAE1', BG = 'F3F5F8', ACC = '0E9F9A', WARN = 'C2410C', LX = 0.55, LW = 12.23;
+    // 글꼴: 나눔스퀘어(기본) / KoPubWorld돋움 / 맑은 고딕 — 파일에 글꼴은 포함되지 않으므로 보는 PC에 설치돼 있어야 한다 (없으면 PowerPoint가 대체 글꼴로 표시)
+    const FONTS = { ns: ['나눔스퀘어', '나눔스퀘어 ExtraBold'], kp: ['KoPubWorld돋움체 Medium', 'KoPubWorld돋움체 Bold'], mg: ['맑은 고딕', '맑은 고딕'] };
+    let fk = 'ns'; try { fk = localStorage.getItem('rfont') || 'ns'; } catch (e) {} const [F, FH] = FONTS[fk] || FONTS.ns;
+    const NAVY = '0B1F3A', INK = '1F2937', MUTE = '6B7280', LINE = 'DDD8CC', BG = 'F5F2EB', ACC = 'B08D57', GOLD = '9A7B45', GOLDBG = 'F3EBDD', ZEBRA = 'F9F7F2', WARN = 'C2410C', LX = 0.55, LW = 12.23;
     const today = S.asOf.getFullYear() + '.' + String(S.asOf.getMonth() + 1).padStart(2, '0') + '.' + String(S.asOf.getDate()).padStart(2, '0');
     const n = v => (v == null || isNaN(v)) ? '-' : Math.round(v).toLocaleString('ko-KR'), mean = a => a.reduce((x, y) => x + y, 0) / a.length;
     const rOf = r => r.ratio || SUPPLY, ppy = (r, t) => t[3] / (t[1] * rOf(r) / PY), pyR = (r, a) => Math.round(a * rOf(r) / PY);
     const area = `${d1} ${d2} ${d3}`.trim();
-    const TH = t => ({ text: t, options: { bold: true, color: 'FFFFFF', fill: { color: NAVY }, align: 'center' } });
+    const TH = (t, f) => ({ text: t, options: { bold: true, color: 'FFFFFF', fill: { color: typeof f === 'string' ? f : NAVY }, align: 'center' } });
     const cell = (t, o) => ({ text: String(t), options: Object.assign({ align: 'center' }, o || {}) });
-    const tbl = (sl, data, x, y, w, colW, fs, rowH) => sl.addTable(data, { x, y, w, colW, fontFace: F, fontSize: fs || 9, border: { type: 'solid', pt: 0.5, color: LINE }, valign: 'middle', margin: [2, 5, 2, 5], rowH: rowH || 0.28, color: INK });
+    const tbl = (sl, data, x, y, w, colW, fs, rowH) => { data.forEach((rw, ri) => { if (ri && ri % 2 === 0) rw.forEach(c => { if (c && c.options && !c.options.fill) c.options.fill = { color: ZEBRA }; }); }); return sl.addTable(data, { x, y, w, colW, fontFace: F, fontSize: fs || 9, border: { type: 'solid', pt: 0.5, color: LINE }, valign: 'middle', margin: [2, 5, 2, 5], rowH: rowH || 0.28, color: INK }); };
     let pageNo = 1;
     const page = (headline, tag) => { const sl = pres.addSlide(); pageNo++; sl.background = { color: 'FFFFFF' };
-      sl.addText(tag, { x: LX, y: 0.32, w: 8, h: 0.24, fontFace: F, fontSize: 9, bold: true, color: ACC, margin: 0, isTextBox: true });
-      sl.addText(headline, { x: LX, y: 0.56, w: LW, h: 0.62, fontFace: F, fontSize: 20, bold: true, color: INK, margin: 0, valign: 'middle', isTextBox: true, fit: 'shrink' });
+      sl.addShape(pres.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 0.12, fill: { color: NAVY }, line: { color: NAVY, width: 0 } });
+      sl.addShape(pres.ShapeType.rect, { x: LX, y: 0.43, w: 0.3, h: 0.04, fill: { color: ACC }, line: { color: ACC, width: 0 } });
+      sl.addText(tag, { x: LX + 0.42, y: 0.31, w: 8, h: 0.26, fontFace: FH, fontSize: 9, color: GOLD, charSpacing: 2, margin: 0, isTextBox: true });
+      sl.addText(headline, { x: LX, y: 0.62, w: LW, h: 0.6, fontFace: FH, fontSize: 18, color: NAVY, margin: 0, valign: 'middle', isTextBox: true, fit: 'shrink' });
+      sl.addShape(pres.ShapeType.rect, { x: LX, y: 7.02, w: LW, h: 0.01, fill: { color: LINE }, line: { color: LINE, width: 0 } });
       sl.addText(`출처: 국토교통부 실거래가 공개시스템, K-apt, 청약홈, 지도 © OpenStreetMap · 기준일 ${today} · 해제 거래 제외 · 참고용`, { x: LX, y: 7.08, w: 10.5, h: 0.22, fontFace: F, fontSize: 8, color: MUTE, margin: 0, isTextBox: true });
-      sl.addText(String(pageNo), { x: 12.08, y: 7.08, w: 0.7, h: 0.22, fontFace: F, fontSize: 8, color: MUTE, align: 'right', margin: 0, isTextBox: true });
+      sl.addText(String(pageNo), { x: 12.08, y: 7.08, w: 0.7, h: 0.22, fontFace: FH, fontSize: 8, color: GOLD, align: 'right', margin: 0, isTextBox: true });
       return sl; };
-    const kpi = (sl, x, y, w, label, value, sub) => { sl.addShape(pres.ShapeType.rect, { x, y, w, h: 1.15, fill: { color: BG }, line: { color: BG, width: 0 } });
-      sl.addText(label, { x: x + 0.18, y: y + 0.12, w: w - 0.3, h: 0.24, fontFace: F, fontSize: 9.5, color: MUTE, margin: 0, isTextBox: true });
-      sl.addText(value, { x: x + 0.18, y: y + 0.36, w: w - 0.3, h: 0.48, fontFace: F, fontSize: 24, bold: true, color: NAVY, margin: 0, isTextBox: true, fit: 'shrink' });
-      sl.addText(sub || '', { x: x + 0.18, y: y + 0.84, w: w - 0.3, h: 0.22, fontFace: F, fontSize: 8.5, color: MUTE, margin: 0, isTextBox: true }); };
+    const kpi = (sl, x, y, w, label, value, sub) => { sl.addShape(pres.ShapeType.rect, { x, y, w, h: 1.15, fill: { color: 'FFFFFF' }, line: { color: LINE, width: 0.75 } });
+      sl.addShape(pres.ShapeType.rect, { x, y, w: 0.07, h: 1.15, fill: { color: ACC }, line: { color: ACC, width: 0 } });
+      sl.addText(label, { x: x + 0.22, y: y + 0.12, w: w - 0.34, h: 0.24, fontFace: F, fontSize: 9.5, color: MUTE, margin: 0, isTextBox: true });
+      sl.addText(value, { x: x + 0.22, y: y + 0.36, w: w - 0.34, h: 0.48, fontFace: FH, fontSize: 24, color: NAVY, margin: 0, isTextBox: true, fit: 'shrink' });
+      sl.addText(sub || '', { x: x + 0.22, y: y + 0.84, w: w - 0.34, h: 0.22, fontFace: F, fontSize: 8.5, color: MUTE, margin: 0, isTextBox: true, fit: 'shrink' }); };
     const chartBase = () => ({ catAxisLabelFontFace: F, valAxisLabelFontFace: F, catAxisLabelFontSize: 9, valAxisLabelFontSize: 9, catAxisLabelColor: MUTE, valAxisLabelColor: MUTE, valGridLine: { color: 'E6E9EE', size: 0.5 }, catGridLine: { style: 'none' }, showLegend: false, dataLabelFontFace: F, dataLabelFontSize: 8.5, dataLabelColor: INK, valAxisLabelFormatCode: '#,##0', dataLabelFormatCode: '#,##0' });
     // 집계
     const pairs1 = pick.flatMap(r => r.all.filter(t => t[0] >= cut1).map(t => [r, t])), pairs0 = pick.flatMap(r => r.all.filter(t => t[0] < cut1).map(t => [r, t]));
@@ -652,11 +659,20 @@ async function makeReport() {
     const estN = det.filter(r => !r.ratio).length;
 
     // 표지
+    status('기초자료 준비 중… 위치도 작성');
+    const mapPts = pick.slice(0, 30), salePts = sales.slice(0, 8), mi = await mapImage(S.center, mapPts.map(r => ({ lat: r.c.lat, lon: r.c.lon })), 1640, 1100, salePts.map(x => ({ lat: x.lat, lon: x.lon }))), far = Math.max(...mapPts.map(r => r.d));
     let sl = pres.addSlide(); sl.background = { color: NAVY };
-    sl.addText('MARKET SNAPSHOT', { x: 0.8, y: 2.0, w: 8, h: 0.3, fontFace: F, fontSize: 11, bold: true, color: ACC, charSpacing: 3, margin: 0, isTextBox: true });
-    sl.addText('공동주택 시장조사 기초자료', { x: 0.8, y: 2.4, w: 11.5, h: 0.9, fontFace: F, fontSize: 38, bold: true, color: 'FFFFFF', margin: 0, isTextBox: true });
-    sl.addText(area, { x: 0.8, y: 3.35, w: 11.5, h: 0.5, fontFace: F, fontSize: 20, color: 'DCE3EC', margin: 0, isTextBox: true });
-    sl.addText(`대상지: ${S.center.label || area}\n조사 범위: 반경 ${radTxt} 아파트 ${cand.length}개 단지 중 ${pick.length}개 (${tier}${tierNote}) · 주변 분양 ${sales.length}건\n기준일: ${today}`, { x: 0.8, y: 4.6, w: 11.5, h: 1.0, fontFace: F, fontSize: 11.5, color: 'AEB9C7', margin: 0, isTextBox: true, valign: 'top', paraSpaceAfter: 4 });
+    if (mi && mi.tiles) { sl.addImage({ data: mi.data, x: 7.3, y: 0, w: 6.033, h: 7.5, sizing: { type: 'cover', w: 6.033, h: 7.5 } });
+      sl.addShape(pres.ShapeType.rect, { x: 7.3, y: 0, w: 6.033, h: 7.5, fill: { color: NAVY, transparency: 38 }, line: { color: NAVY, width: 0 } }); }
+    else { sl.addShape(pres.ShapeType.rect, { x: 7.3, y: 0, w: 6.033, h: 7.5, fill: { color: '10294A' }, line: { color: '10294A', width: 0 } });
+      for (let k = 0; k < 4; k++) sl.addShape(pres.ShapeType.ellipse, { x: 8.2 + k * 0.45, y: 1.6 + k * 0.45, w: 5 - k * 0.9, h: 5 - k * 0.9, fill: { color: '10294A' }, line: { color: '24406B', width: 1 } }); }
+    sl.addShape(pres.ShapeType.rect, { x: 7.3, y: 0, w: 0.06, h: 7.5, fill: { color: ACC }, line: { color: ACC, width: 0 } });
+    sl.addText('MARKET SNAPSHOT', { x: 0.8, y: 1.55, w: 6, h: 0.3, fontFace: FH, fontSize: 11, color: ACC, charSpacing: 4, margin: 0, isTextBox: true });
+    sl.addText('공동주택\n시장조사 기초자료', { x: 0.8, y: 2.0, w: 6.4, h: 1.9, fontFace: FH, fontSize: 36, color: 'FFFFFF', margin: 0, valign: 'top', isTextBox: true, paraSpaceAfter: 2 });
+    sl.addShape(pres.ShapeType.rect, { x: 0.8, y: 4.1, w: 0.9, h: 0.05, fill: { color: ACC }, line: { color: ACC, width: 0 } });
+    sl.addText(area, { x: 0.8, y: 4.35, w: 6.4, h: 0.45, fontFace: FH, fontSize: 18, color: 'FFFFFF', margin: 0, isTextBox: true });
+    sl.addText(`대상지  ${S.center.label || area}\n조사 범위  반경 ${radTxt} 아파트 ${cand.length}개 단지 중 ${pick.length}개 (${tier}${tierNote})\n주변 분양  ${sales.length}건`, { x: 0.8, y: 4.95, w: 6.4, h: 1.2, fontFace: F, fontSize: 10.5, color: 'C3CCD9', margin: 0, isTextBox: true, valign: 'top', paraSpaceAfter: 4 });
+    sl.addText(today, { x: 0.8, y: 6.75, w: 4, h: 0.3, fontFace: FH, fontSize: 11, color: ACC, margin: 0, isTextBox: true });
 
     // 요약
     const p84 = pairs1.filter(([r, t]) => bk(t) === 84), p59 = pairs1.filter(([r, t]) => bk(t) === 59), mA = a => a.length ? n(med(a.map(([r, t]) => t[3]))) : null, pA = a => a.length ? n(med(a.map(([r, t]) => ppy(r, t)))) : null;
@@ -672,17 +688,16 @@ async function makeReport() {
     sl.addText(kBar ? `단지별 ${kBar}㎡ 중위 실거래가 (만원)` : '단지별 평당가 (주력 면적타입 중위, 만원)', { x: LX, y: 2.8, w: 7.4, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
     if (bars.length) sl.addChart(pres.ChartType.bar, [{ name: kBar ? '중위 실거래가' : '평당가', labels: bars.map(b => b.name), values: bars.map(b => b.v) }], Object.assign(chartBase(), { x: LX, y: 3.08, w: 7.4, h: 3.85, barDir: 'bar', chartColors: [NAVY], showValue: true, dataLabelPosition: 'outEnd', barGapWidthPct: 55, valAxisMinVal: 0 }));
     else sl.addText('기간 내 거래가 없어 차트를 그리지 못했습니다.', { x: LX, y: 3.2, w: 7.4, h: 0.3, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true });
-    sl.addText('조사 기준', { x: 8.3, y: 2.8, w: 4.4, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
+    sl.addShape(pres.ShapeType.rect, { x: 8.1, y: 2.72, w: 4.68, h: 4.2, fill: { color: BG }, line: { color: BG, width: 0 } });
+    sl.addText('조사 기준', { x: 8.3, y: 2.85, w: 4.4, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
     sl.addText([`범위: 대상지 반경 ${radTxt} 안 아파트 (선택 반경 ${radAsk}${radUsed > S.rad ? ', 비교 단지가 3개 미만이라 확대' : ''})`, `연차: 준공 5년 이내 우선(3개 이상), 아니면 10년 이내, 아니면 전체 → 이번 자료는 ${tier}${tierNote}`, '실거래: 단지별 최근 1년, 1년 내 거래가 없는 단지는 최근 2년', `평당가: 공급면적 기준. 단지별 공급/전용 비율은 K-apt 값을 쓰고, 없는 ${estN}개 단지는 전용 × 1.32로 추정`,
       noTr.length ? `최근 2년 거래가 없는 단지 ${noTr.length}개는 요약표에만 표시` : '대상 단지 모두 최근 2년 내 거래 있음', `분양: 청약홈 최근 2년 공고, 반경 ${saleRTxt} 이내 ${saleFar ? '없음 → 같은 시·군 가까운 순 ' : ''}${sales.length}건`].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
-      { x: 8.3, y: 3.1, w: 4.45, h: 3.6, fontFace: F, fontSize: 10.5, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 8, isTextBox: true });
+      { x: 8.3, y: 3.2, w: 4.33, h: 3.6, fontFace: F, fontSize: 10, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 8, isTextBox: true });
 
     // 위치도
-    status('기초자료 준비 중… 위치도 작성');
-    const mapPts = pick.slice(0, 30), salePts = sales.slice(0, 8), mi = await mapImage(S.center, mapPts.map(r => ({ lat: r.c.lat, lon: r.c.lon })), 1640, 1100, salePts.map(x => ({ lat: x.lat, lon: x.lon }))), far = Math.max(...mapPts.map(r => r.d));
     sl = page(`대상지에서 ${far < 1000 ? Math.round(far) + 'm' : (far / 1000).toFixed(1) + 'km'} 안에 비교 단지 ${mapPts.length}개, 분양 단지 ${salePts.length}개가 분포`, 'LOCATION');
-    if (mi) sl.addImage({ data: mi.data, x: LX, y: 1.4, w: 8.2, h: 5.5 });
-    sl.addText(mi && mi.tiles ? '원형 번호는 비교 단지(단지 요약표와 동일), 주황 사각형 알파벳은 분양 단지입니다.' : '배경지도를 받지 못해 위치 관계만 표시했습니다. 원형 번호는 비교 단지, 주황 사각형 알파벳은 분양 단지입니다.', { x: LX, y: 6.92, w: 8.2, h: 0.16, fontFace: F, fontSize: 7.5, color: MUTE, margin: 0, isTextBox: true });
+    if (mi) sl.addImage({ data: mi.data, x: LX, y: 1.4, w: 8.05, h: 5.4 });
+    sl.addText(mi && mi.tiles ? '원형 번호는 비교 단지(단지 요약표와 동일), 주황 사각형 알파벳은 분양 단지입니다.' : '배경지도를 받지 못해 위치 관계만 표시했습니다. 원형 번호는 비교 단지, 주황 사각형 알파벳은 분양 단지입니다.', { x: LX, y: 6.82, w: 8.2, h: 0.16, fontFace: F, fontSize: 7.5, color: MUTE, margin: 0, isTextBox: true });
     const dTxt = d => d < 1000 ? Math.round(d) + 'm' : (d / 1000).toFixed(1) + 'km', nC = salePts.length ? 12 : 18;
     tbl(sl, [['No.', '단지명', '준공', '거리'].map(TH)].concat(mapPts.slice(0, nC).map((r, i) => [cell(i + 1, { bold: true, color: NAVY }), cell(r.c.name, { align: 'left' }), cell(r.year || '-'), cell(dTxt(r.d))]))
       .concat(salePts.slice(0, 6).map((x, i) => [cell(String.fromCharCode(65 + i), { bold: true, color: 'E8710A' }), cell(String(x.r0.HOUSE_NM || '') + ' (분양)', { align: 'left' }), cell(String(x.r0.MVN_PREARNGE_YM || '').slice(0, 4) || '-'), cell(dTxt(x.d))])), 8.95, 1.4, 3.83, [0.45, 2.1, 0.6, 0.68], 8.5, 0.27);
@@ -695,16 +710,16 @@ async function makeReport() {
     const withP = byM.filter(x => x.p != null);
     sl = page(mp1 ? `최근 12개월 중위 평당가 ${n(mp1)}만원, 직전 12개월 대비 ${chgTxt} · 월평균 거래 ${(pairs1.length / 12).toFixed(1)}건` : '최근 2년 거래 추이', 'PRICE & VOLUME TREND');
     sl.addText('월별 중위 평당가 (만원, 거래가 있는 달만)', { x: LX, y: 1.4, w: 6, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
-    if (withP.length > 1) sl.addChart(pres.ChartType.line, [{ name: '중위 평당가', labels: withP.map(x => x.lab), values: withP.map(x => x.p) }], Object.assign(chartBase(), { x: LX, y: 1.7, w: 6.0, h: 5.1, chartColors: [ACC], lineSize: 2.25, lineDataSymbolSize: 6, catAxisLabelFontSize: 8 }));
+    if (withP.length > 1) sl.addChart(pres.ChartType.line, [{ name: '중위 평당가', labels: withP.map(x => x.lab), values: withP.map(x => x.p) }], Object.assign(chartBase(), { x: LX, y: 1.7, w: 6.0, h: 5.1, chartColors: [GOLD], lineSize: 2.25, lineDataSymbolSize: 6, catAxisLabelFontSize: 8 }));
     else sl.addText('월별 추이를 그릴 만큼 거래가 없습니다.', { x: LX, y: 1.8, w: 6, h: 0.3, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true });
     sl.addText('월별 거래 건수 (최근 24개월)', { x: 6.9, y: 1.4, w: 5.9, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
     sl.addChart(pres.ChartType.bar, [{ name: '거래 건수', labels: byM.map(x => x.lab), values: byM.map(x => x.cnt) }], Object.assign(chartBase(), { x: 6.9, y: 1.7, w: 5.88, h: 5.1, barDir: 'col', chartColors: [NAVY], catAxisLabelFontSize: 7.5, barGapWidthPct: 40, valAxisMinVal: 0 }));
 
     // 단지 요약표
-    const sumHead = ['단지명', '거리', '준공', '세대수', '층수', '84㎡ 건수', '84㎡ 중위가', '84㎡ 평당가', '59㎡ 건수', '59㎡ 중위가', '59㎡ 평당가', '공급/전용', '기간'].map(TH), sumW = [2.4, 0.7, 0.6, 0.75, 0.9, 0.7, 0.95, 0.95, 0.7, 0.95, 0.95, 0.9, 0.78];
+    const sumHead = ['단지명', '거리', '준공', '세대수', '층수', '84㎡ 건수', '84㎡ 중위가', '84㎡ 평당가', '59㎡ 건수', '59㎡ 중위가', '59㎡ 평당가', '공급/전용', '기간'].map(t => TH(t, /^(84|59)㎡/.test(t) ? GOLD : NAVY)), sumW = [2.4, 0.7, 0.6, 0.75, 0.9, 0.7, 0.95, 0.95, 0.7, 0.95, 0.95, 0.9, 0.78];
     const sumRows = pick.map(r => { const a84 = stOf(r, 84), a59 = stOf(r, 59);
       return [cell(`${pick.indexOf(r) + 1}. ${r.c.name}`, { align: 'left', bold: true }), cell(dTxt(r.d)), cell(r.year || '-'), cell(r.hh ? n(r.hh) : '-'), cell(r.up ? (r.dn ? `B${r.dn}/` : '') + r.up + 'F' : '-'),
-        cell(a84 ? a84.cnt : '-'), cell(a84 ? n(a84.med) : '-', { bold: true, color: NAVY }), cell(a84 ? n(a84.ppy) : '-'), cell(a59 ? a59.cnt : '-'), cell(a59 ? n(a59.med) : '-', { bold: true, color: NAVY }), cell(a59 ? n(a59.ppy) : '-'),
+        cell(a84 ? a84.cnt : '-', { fill: { color: GOLDBG } }), cell(a84 ? n(a84.med) : '-', { bold: true, color: NAVY, fill: { color: GOLDBG } }), cell(a84 ? n(a84.ppy) : '-', { fill: { color: GOLDBG } }), cell(a59 ? a59.cnt : '-'), cell(a59 ? n(a59.med) : '-', { bold: true, color: NAVY }), cell(a59 ? n(a59.ppy) : '-'),
         cell(r.ratio ? r.ratio.toFixed(2) : '1.32*', r.ratio ? {} : { color: WARN }), cell(r.tr.length ? r.span + '년' : '-')]; });
     for (let i = 0; i < Math.max(sumRows.length, 1); i += 16) {
       const m84 = det.map(r => stOf(r, 84)).filter(Boolean).map(x => x.med), rg = v => !v.length ? '' : (Math.round(Math.min(...v)) === Math.round(Math.max(...v)) ? n(v[0]) : n(Math.min(...v)) + '~' + n(Math.max(...v)));
@@ -734,7 +749,7 @@ async function makeReport() {
       tbl(sl, recent(tA), LX, y1 + 0.3, 7.0, [1.2, 2.0, 0.8, 1.6, 1.4], 9, 0.29);
       const cm = ms.map(mm => { const v = r.all.filter(t => Math.floor(t[0] / 100) === mm); return v.length ? { lab: String(mm).slice(2, 4) + '.' + String(mm).slice(4), p: Math.round(med(v.map(t => ppy(r, t)))) } : null; }).filter(Boolean);
       sl.addText('월별 중위 평당가 (최근 2년, 만원)', { x: 7.9, y: 1.75, w: 4.9, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
-      if (cm.length > 1) sl.addChart(pres.ChartType.line, [{ name: '중위 평당가', labels: cm.map(x => x.lab), values: cm.map(x => x.p) }], Object.assign(chartBase(), { x: 7.9, y: 2.05, w: 4.88, h: tB ? 2.25 : 4.75, chartColors: [ACC], lineSize: 2.25, lineDataSymbolSize: 6, catAxisLabelFontSize: 8 }));
+      if (cm.length > 1) sl.addChart(pres.ChartType.line, [{ name: '중위 평당가', labels: cm.map(x => x.lab), values: cm.map(x => x.p) }], Object.assign(chartBase(), { x: 7.9, y: 2.05, w: 4.88, h: tB ? 2.25 : 4.75, chartColors: [GOLD], lineSize: 2.25, lineDataSymbolSize: 6, catAxisLabelFontSize: 8 }));
       else sl.addText('추이를 그릴 만큼 거래가 없습니다.', { x: 7.9, y: 2.15, w: 4.8, h: 0.3, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true });
       if (tB) { sl.addText(`${tB}㎡ 최근 실거래 5건 (최근 2년 ${(ga.get(tB) || []).length}건 중)`, { x: 7.9, y: 4.42, w: 4.88, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
         tbl(sl, recent(tB).map((rw, i) => i ? [rw[0], cell(`${rw[1].text.split(' ')[0]}`), rw[2], rw[3], rw[4]] : rw), 7.9, 4.72, 4.88, [0.95, 1.0, 0.5, 1.2, 1.23], 8.5, 0.29); } }
@@ -771,6 +786,7 @@ async function makeReport() {
 
     // 기준과 한계
     sl = page('이 자료의 기준과 한계', 'METHODOLOGY');
+    sl.addShape(pres.ShapeType.rect, { x: LX - 0.12, y: 1.3, w: LW + 0.24, h: 5.62, fill: { color: BG }, line: { color: BG, width: 0 } });
     sl.addText([`조사 범위는 대상지 반경 ${radTxt} 안의 아파트 ${cand.length}개 단지입니다. 선택 반경 ${radAsk}에서 시작해 준공 5년 이내 단지가 3개 이상 잡힐 때까지 최대 3km로 넓혔고, 준공 5년 이내 → 10년 이내 → 전체 순으로 3개 이상인 첫 구간만 넣었습니다 (이번 자료: ${tier}, ${pick.length}개${cutN ? `, 가까운 30개만 사용` : ''}).`,
       `주변 분양은 청약홈 최근 2년 공고 중 반경 ${saleRTxt} 이내(없으면 같은 시·군 가까운 순 3건)를 넣었습니다. 분양 단지 위치는 공급위치 주소(없으면 단지명·지구명·동)를 지도 좌표로 바꾼 값이라 실제와 다소 다를 수 있고(~ 표시는 개략 위치),${noGeo.length ? ` 위치를 찾지 못한 ${noGeo.length}건은 제외했으며,` : ''} '입주 전'은 입주예정월이 기준월 이후인 단지입니다.`,
       unmN ? `단지 목록(K-apt 기준)에 없어 매칭하지 못해 빠진 최근 1년 거래 ${unmN}건이 있습니다 (반경 내 동 기준, 소규모·도시형·최근 입주 단지 등): ${unmEx}` : '',
@@ -782,7 +798,7 @@ async function makeReport() {
       '분양 자료는 청약홈 아파트 분양공고 기준이며, 오피스텔·도시형생활주택과 무순위·임의공급 별도 공고는 포함하지 않았습니다. 분양권 거래는 국토부 신고 자료입니다.',
       '분양 사례의 분양가는 84㎡ 주택형(없으면 공급세대가 가장 많은 주택형)의 최고 분양가입니다. 층별 분양가, 발코니 확장비, 중도금 조건은 모집공고문 분석이 필요합니다.',
       '인구·세대, 미분양, 인허가 등 통계와 적정 분양가 검토는 이 자료에 없습니다.'].filter(Boolean).map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
-      { x: LX, y: 1.4, w: LW, h: 5.55, fontFace: F, fontSize: 11, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 7, isTextBox: true, fit: 'shrink' });
+      { x: LX + 0.12, y: 1.45, w: LW - 0.24, h: 5.35, fontFace: F, fontSize: 11, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 7, isTextBox: true, fit: 'shrink' });
 
     await pres.writeFile({ fileName: `시장조사 기초자료_${d2.replace(/\s/g, '')}_${d3}_${today.replace(/\./g, '')}.pptx` });
     status(`기초자료 PPT를 만들었어요. (반경 ${radTxt} ${pick.length}개 단지, ${tier}${tierNote}, 주변 분양 ${sales.length}건)`);
@@ -996,7 +1012,9 @@ function bind() {
   $('#metric').onchange = () => { S.metric = $('#metric').value; recompute(); };
   $('#sort').onchange = () => { S.sort = $('#sort').value; recompute(); };
   $('#go').onclick = () => doSearch(true);
-  const rb = document.createElement('button'); rb.id = 'rpt'; rb.textContent = '이 위치의 동 기준 시장조사 기초자료 PPT 만들기'; rb.style.cssText = 'grid-column:1/-1;padding:7px'; $('.ctrl').appendChild(rb); rb.onclick = makeReport;
+  const rb = document.createElement('button'); rb.id = 'rpt'; rb.textContent = '이 위치의 반경 기준 시장조사 기초자료 PPT 만들기'; rb.style.cssText = 'grid-column:1/-1;padding:7px'; $('.ctrl').appendChild(rb); rb.onclick = makeReport;
+  { const fl = document.createElement('label'); fl.style.cssText = 'grid-column:1/-1'; fl.innerHTML = 'PPT 글꼴 <select id="rfont"><option value="ns">나눔스퀘어</option><option value="kp">KoPubWorld돋움</option><option value="mg">맑은 고딕</option></select> <small style="color:#6b7785">보는 PC에 설치된 글꼴만 적용돼요</small>'; $('.ctrl').appendChild(fl);
+    try { $('#rfont').value = localStorage.getItem('rfont') || 'ns'; } catch (e) {} $('#rfont').onchange = () => { try { localStorage.setItem('rfont', $('#rfont').value); } catch (e) {} }; }
   $('#q').addEventListener('input', () => { clearTimeout(deb); const q = $('#q').value.trim(); if (q.length < 2) { $('#sug').style.display = 'none'; return; } deb = setTimeout(() => doSearch(false), 300); });
   $('#q').addEventListener('keydown', e => { const n = sugItems.length;
     if (e.key === 'ArrowDown') { e.preventDefault(); sugOn = Math.min(n - 1, sugOn + 1); }
