@@ -689,10 +689,10 @@ async function mapImage(center, pts, W, H, pts2) {
   return r;
 }
 const ymdAgo = m => ymdOf(new Date(S.asOf.getFullYear(), S.asOf.getMonth() - m, S.asOf.getDate()));
-async function makeReport() {
+async function makeReport(detail) {
   if (!S.center) return status('먼저 주소를 검색해 대상지를 정해 주세요.', true);
   if (!KEY) return status('국토부 인증키를 입력한 뒤 눌러 주세요.', true);
-  const btn = $('#rpt'); btn.disabled = true;
+  const btn = $('#rpt'), btn2 = $('#rpt2'); btn.disabled = true; if (btn2) btn2.disabled = true;
   try {
     status('기초자료 준비 중… 대상지 확인');
     const reg = await centerRegion(); if (!reg || !reg.code) throw new Error('대상지의 행정구역을 확인하지 못했어요.');
@@ -748,7 +748,7 @@ async function makeReport() {
     sales = sales.slice(0, 9);
     status('기초자료 준비 중… PPT 작성');
     await loadScript('https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js');
-    const pres = new PptxGenJS(); pres.layout = 'LAYOUT_WIDE'; pres.title = '공동주택 시장조사 기초자료';   // 13.33 x 7.5 in
+    const pres = new PptxGenJS(); pres.layout = 'LAYOUT_WIDE'; pres.title = detail ? '공동주택 시장조사 상세자료' : '공동주택 시장조사 기초자료';   // 13.33 x 7.5 in
     // 글꼴: 나눔스퀘어(기본) / KoPubWorld돋움 / 맑은 고딕 — 파일에 글꼴은 포함되지 않으므로 보는 PC에 설치돼 있어야 한다 (없으면 PowerPoint가 대체 글꼴로 표시)
     const FONTS = { ns: ['나눔스퀘어', '나눔스퀘어 ExtraBold'], kp: ['KoPubWorld돋움체 Medium', 'KoPubWorld돋움체 Bold'], mg: ['맑은 고딕', '맑은 고딕'] };
     let fk = 'ns'; try { fk = localStorage.getItem('rfont') || 'ns'; } catch (e) {} const [F, FH] = FONTS[fk] || FONTS.ns;
@@ -837,6 +837,7 @@ async function makeReport() {
       .concat(salePts.slice(0, 6).map((x, i) => [cell(String.fromCharCode(65 + i), { bold: true, color: 'E8710A' }), cell(String(x.r0.HOUSE_NM || '') + ' (분양)', { align: 'left' }), cell(String(x.r0.MVN_PREARNGE_YM || '').slice(0, 4) || '-'), cell(dTxt(x.d))])), 8.95, 1.4, 3.83, [0.45, 2.1, 0.6, 0.68], 8.5, 0.27);
     if (mapPts.length > nC) sl.addText(`${nC + 1}번 이후 ${mapPts.length - nC}개 단지는 단지 요약표 참조`, { x: 8.95, y: 6.7, w: 3.8, h: 0.2, fontFace: F, fontSize: 8, color: MUTE, margin: 0, isTextBox: true });
 
+    if (detail) {   // 상세자료에만 들어가는 쪽: 입지환경·인구·연령·입주예정
     // 입지환경 (카카오 지도 검색)
     status('기초자료 준비 중… 입지환경 조회');
     { const env = await locEnv(S.center), er = envRows(env);
@@ -877,6 +878,7 @@ async function makeReport() {
     const KK = { pres, page, kpi, tbl, cell, TH, chartBase, F, LX, LW, NAVY, INK, MUTE, GOLD, GOLDBG, n, reg, d2, d3, sido: SIDO_OF[code5.slice(0, 2)] };
     status('기초자료 준비 중… 연령 구성 조회'); await addAgeSlide(KK, popRes);
     status('기초자료 준비 중… 입주예정 조회'); await addSupplySlide(KK, popRes);
+    }
     // 추이
     const ms = []; for (let k = 23; k >= 0; k--) { const d = new Date(S.asOf.getFullYear(), S.asOf.getMonth() - k, 1); ms.push(d.getFullYear() * 100 + d.getMonth() + 1); }
     const allPairs = pick.flatMap(r => r.all.map(t => [r, t]));
@@ -1011,18 +1013,18 @@ async function makeReport() {
       '인구·세대, 미분양, 인허가 등 통계와 적정 분양가 검토는 이 자료에 없습니다.'].filter(Boolean).map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
       { x: LX + 0.12, y: 1.45, w: LW - 0.24, h: 5.35, fontFace: F, fontSize: 11, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 7, isTextBox: true, fit: 'shrink' });
 
-    await pres.writeFile({ fileName: `시장조사 기초자료_${d2.replace(/\s/g, '')}_${d3}_${today.replace(/\./g, '')}.pptx` });
-    status(`기초자료 PPT를 만들었어요. (반경 ${radTxt} ${pick.length}개 단지, ${tier}${tierNote}, 주변 분양 ${sales.length}건)`);
-  } catch (e) { status('기초자료 PPT를 만들지 못했어요: ' + (e.message || e.msg || e), true); }
-  btn.disabled = false; recompute();
+    await pres.writeFile({ fileName: `시장조사 ${detail ? '상세' : '기초'}자료_${d2.replace(/\s/g, '')}_${d3}_${today.replace(/\./g, '')}.pptx` });
+    status(`${detail ? '상세' : '기초'}자료 PPT를 만들었어요. (반경 ${radTxt} ${pick.length}개 단지, ${tier}${tierNote}, 주변 분양 ${sales.length}건)`);
+  } catch (e) { status((detail ? '상세' : '기초') + '자료 PPT를 만들지 못했어요: ' + (e.message || e.msg || e), true); }
+  btn.disabled = false; if (btn2) btn2.disabled = false; recompute();
 }
 
 // 오피스텔 시장조사 기초자료 PPT: 대상지 반경 오피스텔(최근 1년, 없으면 2년 실거래) + 주변 오피스텔 분양(청약홈).
 // 아파트와 달리 평당가는 '전용면적' 기준이다(오피스텔은 전용률이 낮아 공급면적 환산을 하지 않음). 면적은 전용 소수점 버림.
-async function makeOffiReport() {
+async function makeOffiReport(detail) {
   if (!S.center) return status('먼저 주소를 검색해 대상지를 정해 주세요.', true);
   if (!KEY) return status('국토부 인증키를 입력한 뒤 눌러 주세요.', true);
-  const btn = $('#rpt'); btn.disabled = true;
+  const btn = $('#rpt'), btn2 = $('#rpt2'); btn.disabled = true; if (btn2) btn2.disabled = true;
   try {
     status('오피스텔 기초자료 준비 중… 대상지 확인');
     const reg = await centerRegion(); if (!reg || !reg.code) throw new Error('대상지의 행정구역을 확인하지 못했어요.');
@@ -1060,7 +1062,7 @@ async function makeOffiReport() {
     sales = sales.slice(0, 9);
     status('오피스텔 기초자료 준비 중… PPT 작성');
     await loadScript('https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js');
-    const pres = new PptxGenJS(); pres.layout = 'LAYOUT_WIDE'; pres.title = '오피스텔 시장조사 기초자료';
+    const pres = new PptxGenJS(); pres.layout = 'LAYOUT_WIDE'; pres.title = detail ? '오피스텔 시장조사 상세자료' : '오피스텔 시장조사 기초자료';
     const FONTS = { ns: ['나눔스퀘어', '나눔스퀘어 ExtraBold'], kp: ['KoPubWorld돋움체 Medium', 'KoPubWorld돋움체 Bold'], mg: ['맑은 고딕', '맑은 고딕'] };
     let fk = 'ns'; try { fk = localStorage.getItem('rfont') || 'ns'; } catch (e) {} const [F, FH] = FONTS[fk] || FONTS.ns;
     const NAVY = '0B1F3A', INK = '1F2937', MUTE = '6B7280', LINE = 'DDD8CC', BG = 'F5F2EB', ACC = 'B08D57', GOLD = '9A7B45', GOLDBG = 'F3EBDD', ZEBRA = 'F9F7F2', WARN = 'C2410C', LX = 0.55, LW = 12.23;
@@ -1135,6 +1137,7 @@ async function makeOffiReport() {
     tbl(sl, [['No.', '오피스텔', '준공', '거리'].map(TH)].concat(mapPts.slice(0, nC).map((r, i) => [cell(i + 1, { bold: true, color: NAVY }), cell(r.g.name, { align: 'left' }), cell(r.year || '-'), cell(dTxt(r.d))]))
       .concat(salePts.slice(0, 6).map((x, i) => [cell(String.fromCharCode(65 + i), { bold: true, color: 'E8710A' }), cell(String(x.r0.HOUSE_NM || '') + ' (분양)', { align: 'left' }), cell(String(x.r0.MVN_PREARNGE_YM || '').slice(0, 4) || '-'), cell(dTxt(x.d))])), 8.95, 1.4, 3.83, [0.45, 2.1, 0.6, 0.68], 8.5, 0.27);
     if (mapPts.length > nC) sl.addText(`${nC + 1}번 이후 ${mapPts.length - nC}곳은 요약표 참조`, { x: 8.95, y: 6.7, w: 3.8, h: 0.2, fontFace: F, fontSize: 8, color: MUTE, margin: 0, isTextBox: true });
+    if (detail) {   // 상세자료에만 들어가는 쪽: 입지환경·인구·연령·입주예정
     // 입지환경 (카카오 지도 검색)
     status('기초자료 준비 중… 입지환경 조회');
     { const env = await locEnv(S.center), er = envRows(env);
@@ -1175,6 +1178,7 @@ async function makeOffiReport() {
     const KK = { pres, page, kpi, tbl, cell, TH, chartBase, F, LX, LW, NAVY, INK, MUTE, GOLD, GOLDBG, n, reg, d2, d3, sido: SIDO_OF[code5.slice(0, 2)] };
     status('기초자료 준비 중… 연령 구성 조회'); await addAgeSlide(KK, popRes);
     status('기초자료 준비 중… 입주예정 조회'); await addSupplySlide(KK, popRes);
+    }
     // 추이
     const ms = []; for (let k = 23; k >= 0; k--) { const d = new Date(S.asOf.getFullYear(), S.asOf.getMonth() - k, 1); ms.push(d.getFullYear() * 100 + d.getMonth() + 1); }
     const allPairs = rows.flatMap(r => r.all.map(t => [r, t]));
@@ -1247,10 +1251,10 @@ async function makeOffiReport() {
       '분양은 청약홈 오피스텔·도시형생활주택·민간임대·생활숙박시설 공고 기준이며, 위치는 공급위치 주소를 좌표로 바꾼 값이라 실제와 다를 수 있습니다. 오피스텔 분양권 전매 실거래는 공개 자료가 없어 포함하지 않았습니다.',
       '전월세·임대수익률, 인구·세대, 공급(착공·준공) 물량, 적정 분양가 검토는 이 자료에 없습니다.'].filter(Boolean).map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
       { x: LX + 0.12, y: 1.45, w: LW - 0.24, h: 5.35, fontFace: F, fontSize: 11, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 7, isTextBox: true, fit: 'shrink' });
-    await pres.writeFile({ fileName: `오피스텔 시장조사 기초자료_${d2.replace(/\s/g, '')}_${d3}_${today.replace(/\./g, '')}.pptx` });
-    status(`오피스텔 기초자료 PPT를 만들었어요. (반경 ${radTxt} ${rows.length}곳, 주변 분양 ${sales.length}건)`);
-  } catch (e) { status('오피스텔 기초자료 PPT를 만들지 못했어요: ' + (e.message || e.msg || e), true); }
-  btn.disabled = false; recomputeOffi();
+    await pres.writeFile({ fileName: `오피스텔 시장조사 ${detail ? '상세' : '기초'}자료_${d2.replace(/\s/g, '')}_${d3}_${today.replace(/\./g, '')}.pptx` });
+    status(`오피스텔 ${detail ? '상세' : '기초'}자료 PPT를 만들었어요. (반경 ${radTxt} ${rows.length}곳, 주변 분양 ${sales.length}건)`);
+  } catch (e) { status('오피스텔 ' + (detail ? '상세' : '기초') + '자료 PPT를 만들지 못했어요: ' + (e.message || e.msg || e), true); }
+  btn.disabled = false; if (btn2) btn2.disabled = false; recomputeOffi();
 }
 
 /* ---------- 분양 분석 (모집공고 요약) ---------- */
@@ -1684,7 +1688,8 @@ function bind() {
   { const yl = document.createElement('label'); yl.id = 'ylab'; yl.style.display = 'none'; yl.innerHTML = 'PPT 준공연도<select id="oyear"><option value="0">제한 없음</option><option value="3">3년 이내</option><option value="5">5년 이내</option><option value="10">10년 이내</option></select>';
     yl.style.gridColumn = '1/-1'; yl.dataset.pending = '1'; $('.ctrl').appendChild(yl); $('#oyear').onchange = () => { S.oyear = +$('#oyear').value; }; }
   $('#go').onclick = () => doSearch(true);
-  const rb = document.createElement('button'); rb.id = 'rpt'; rb.textContent = '이 위치의 반경 기준 시장조사 기초자료 PPT 만들기'; rb.style.cssText = 'grid-column:1/-1;padding:7px'; $('.ctrl').appendChild(rb); rb.onclick = () => (S.asset === 'offi' ? makeOffiReport() : makeReport());
+  const rb = document.createElement('button'); rb.id = 'rpt'; rb.textContent = '이 위치의 반경 기준 시장조사 기초자료 PPT 만들기'; rb.style.cssText = 'grid-column:1/-1;padding:7px'; $('.ctrl').appendChild(rb); rb.onclick = () => (S.asset === 'offi' ? makeOffiReport(false) : makeReport(false));
+  const rb2 = document.createElement('button'); rb2.id = 'rpt2'; rb2.textContent = '상세자료 PPT 만들기 (입지환경·인구·연령·입주예정 포함, 1~2분 더 걸려요)'; rb2.style.cssText = 'grid-column:1/-1;padding:7px'; $('.ctrl').appendChild(rb2); rb2.onclick = () => (S.asset === 'offi' ? makeOffiReport(true) : makeReport(true));
   { const fl = document.createElement('label'); fl.id = 'rfl'; fl.style.cssText = 'grid-column:1/-1'; fl.innerHTML = 'PPT 글꼴 <select id="rfont"><option value="ns">나눔스퀘어</option><option value="kp">KoPubWorld돋움</option><option value="mg">맑은 고딕</option></select> <small style="color:#6b7785">보는 PC에 설치된 글꼴만 적용돼요</small>'; $('.ctrl').appendChild(fl);
     try { $('#rfont').value = localStorage.getItem('rfont') || 'ns'; } catch (e) {} $('#rfont').onchange = () => { try { localStorage.setItem('rfont', $('#rfont').value); } catch (e) {} }; }
   $('#q').addEventListener('input', () => { clearTimeout(deb); const q = $('#q').value.trim(); if (q.length < 2) { $('#sug').style.display = 'none'; return; } deb = setTimeout(() => doSearch(false), 300); });
