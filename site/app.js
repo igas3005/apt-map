@@ -305,6 +305,26 @@ function envRows(env) {   // [구분, 시설, 이름, 거리, 도보] 목록과 
   const head = (s1 || e1 || m1) ? ['가장 가까운 ' + (s1 ? `지하철역 ${String(s1.place_name).slice(0, 14)} ${dm(+s1.distance)}(도보 약 ${walkMin(+s1.distance)}분)` : '지하철역 2km 밖'), e1 ? `초등학교 ${dm(+e1.distance)}` : '', m1 ? `대형마트 ${dm(+m1.distance)}` : ''].filter(Boolean).join(', ') : '입지환경 정보를 불러오지 못했습니다';
   return { L, R, head };
 }
+// 인구·세대: 행정안전부 법정동별 주민등록 인구 및 세대현황 (월 기준, 2022.10부터)
+const POP_API = 'https://apis.data.go.kr/1741000/stdgPpltnHhStus/selectStdgPpltnHhStus';
+async function popFetch(code, ym, lv) {
+  let key = KEY; try { key = decodeURIComponent(KEY); } catch (e) {}
+  let r; try { r = await fetch(POP_API + '?' + new URLSearchParams({ serviceKey: key, stdgCd: code, srchFrYm: ym, srchToYm: ym, lv, regSeCd: 1, type: 'JSON', numOfRows: 100, pageNo: 1 })); } catch (e) { throw new Error('네트워크 오류로 인구 자료를 받지 못했습니다'); }
+  let j; try { j = JSON.parse(await r.text()); } catch (e) { throw new Error('인구 API 응답을 해석하지 못했습니다 (HTTP ' + r.status + ')'); }
+  if (j.OpenAPI_ServiceResponse) throw new Error('인구 API 오류: ' + ((j.OpenAPI_ServiceResponse.cmmMsgHeader || {}).returnAuthMsg || 'HTTP ' + r.status));
+  const R = j.Response, head = R && R.head; if (!head || String(head.resultCode) !== '0') throw new Error('인구 API 오류: ' + ((head && head.resultMsg) || 'HTTP ' + r.status));
+  const it = R.items && R.items.item; return it ? [].concat(it) : [];
+}
+async function popData(reg) {
+  const sgg = String(reg.code).slice(0, 5) + '00000', now = new Date(); let ym0 = 0;
+  for (let k = 1; k <= 4 && !ym0; k++) { const d = new Date(now.getFullYear(), now.getMonth() - k, 1), ym = d.getFullYear() * 100 + d.getMonth() + 1;
+    try { if ((await popFetch(sgg, ym, 6)).length) ym0 = ym; } catch (e) { if (/서비스키|등록|인증|네트워크/.test(e.message) || k === 4) throw e; } }
+  if (!ym0) throw new Error('최근 월의 인구 자료가 없습니다');
+  const yms = []; for (let y = 0; y <= 4; y++) { const ym = ym0 - y * 100; if (ym >= 202210) yms.push(ym); } yms.reverse();
+  const ser = await Promise.all(yms.map(async ym => { const [a, b] = await Promise.all([popFetch(sgg, ym, 6), popFetch(sgg, ym, 3)]); const g = x => ({ pop: +x.totNmprCnt || 0, hh: +x.hhCnt || 0, name: x.stdgNm || '', sgg: x.sggNm || '' });
+    return { ym, s: a[0] ? g(a[0]) : null, d: b.map(g).filter(x => x.name) }; }));
+  return { ym0, ser, sggName: (ser[ser.length - 1].s || {}).sgg || '' };
+}
 async function geocodeSale(addr, name) {
   const k = 'sale|' + addr + '|' + name; if (GEO[k]) return GEO[k];
   const done = v => { if (v) { GEO[k] = v; clearTimeout(geoT); geoT = setTimeout(() => { try { localStorage.setItem('geo_v1', JSON.stringify(GEO)); } catch (e) {} }, 800); } return v; };
@@ -761,6 +781,33 @@ async function makeReport() {
       tbl(sl, mk(er.R), LX + 6.25, 1.45, 5.9, [0.75, 1.5, 2.2, 0.8, 0.65], 9, 0.34);
       sl.addText(['거리는 대상지에서 직선거리이고, 도보 시간은 80m/분으로 환산한 추정입니다(실제 경로·고저차와 다릅니다).', '카카오맵 장소 검색 결과 기준이며, 개수는 최대 45곳까지만 집계됩니다. 학교 배정(학구도)은 따로 확인해야 합니다.', '버스·광역교통(GTX 등)과 개발계획은 이 쪽에 포함하지 않았습니다.'].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
         { x: LX + 6.25, y: 4.7, w: 5.9, h: 1.6, fontFace: F, fontSize: 9, color: MUTE, margin: 0, valign: 'top', paraSpaceAfter: 4, isTextBox: true }); }
+    // 인구·세대 (행정안전부 주민등록)
+    status('기초자료 준비 중… 인구·세대 조회');
+    { let pd = null, perr = '';
+      try { pd = await popData(reg); } catch (e) { perr = e.message || '조회하지 못했습니다'; }
+      const lab = ym => `'${String(ym).slice(2, 4)}.${String(ym).slice(4)}`, pct = (a, b) => b ? (a / b - 1) * 100 : null, pt = v => v == null ? '-' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+      if (!pd || pd.ser.length < 2 || !pd.ser[pd.ser.length - 1].s) {
+        sl = page('인구·세대 자료를 불러오지 못했습니다', 'DEMAND · POPULATION');
+        sl.addText(perr || '조회 결과가 없습니다.', { x: LX, y: 1.5, w: LW, h: 0.4, fontFace: F, fontSize: 11, color: MUTE, margin: 0, isTextBox: true }); }
+      else {
+        const ser = pd.ser, A = ser[0], Z = ser[ser.length - 1], yrs = Math.round((Z.ym - A.ym) / 100), pop = ser.map(x => x.s ? x.s.pop : 0), hhs = ser.map(x => x.s ? x.s.hh : 0);
+        const gp = pct(Z.s.pop, A.s.pop), gh = pct(Z.s.hh, A.s.hh), per = Z.s.hh ? Z.s.pop / Z.s.hh : 0, per0 = A.s.hh ? A.s.pop / A.s.hh : 0;
+        const mine = Z.d.find(x => x.name === d3) || null, mine0 = mine ? A.d.find(x => x.name === d3) : null;
+        sl = page(`${pd.sggName} 인구 ${n(Z.s.pop)}명(${yrs}년 ${pt(gp)}), 세대수 ${n(Z.s.hh)}세대(${pt(gh)}) · 세대당 ${per.toFixed(2)}명`, 'DEMAND · POPULATION');
+        const kg = 0.21, kw3 = (LW - kg * 2) / 3;
+        kpi(sl, LX, 1.4, kw3, `${pd.sggName} 주민등록 인구`, `${n(Z.s.pop)}명`, `${lab(A.ym)} 대비 ${pt(gp)} (${n(Z.s.pop - A.s.pop)}명)`);
+        kpi(sl, LX + kw3 + kg, 1.4, kw3, `${pd.sggName} 세대수`, `${n(Z.s.hh)}세대`, `${lab(A.ym)} 대비 ${pt(gh)} · 세대당 ${per0.toFixed(2)} → ${per.toFixed(2)}명`);
+        kpi(sl, LX + (kw3 + kg) * 2, 1.4, kw3, mine ? `${d3} 인구 · 세대수` : '대상지 동', mine ? `${n(mine.pop)}명 · ${n(mine.hh)}세대` : '-', mine && mine0 ? `${lab(A.ym)} 대비 인구 ${pt(pct(mine.pop, mine0.pop))}, 세대수 ${pt(pct(mine.hh, mine0.hh))}` : (mine ? '비교 시점 자료 없음' : '대상지 동을 목록에서 찾지 못함'));
+        sl.addText(`${pd.sggName} 인구 (명)`, { x: LX, y: 2.75, w: 3.7, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
+        sl.addChart(pres.ChartType.bar, [{ name: '인구', labels: ser.map(x => lab(x.ym)), values: pop }], Object.assign(chartBase(), { x: LX, y: 3.05, w: 3.75, h: 3.1, barDir: 'col', chartColors: [NAVY], showValue: true, dataLabelFormatCode: '#,##0', dataLabelFontSize: 7.5, barGapWidthPct: 45, valAxisMinVal: Math.floor(Math.min(...pop) * 0.9 / 1000) * 1000 }));
+        sl.addText(`${pd.sggName} 세대수 (세대)`, { x: LX + 3.95, y: 2.75, w: 3.7, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
+        sl.addChart(pres.ChartType.bar, [{ name: '세대수', labels: ser.map(x => lab(x.ym)), values: hhs }], Object.assign(chartBase(), { x: LX + 3.95, y: 3.05, w: 3.75, h: 3.1, barDir: 'col', chartColors: [GOLD], showValue: true, dataLabelFormatCode: '#,##0', dataLabelFontSize: 7.5, barGapWidthPct: 45, valAxisMinVal: Math.floor(Math.min(...hhs) * 0.9 / 1000) * 1000 }));
+        sl.addText(`읍면동별 (${lab(Z.ym)} · ${lab(A.ym)} 대비)`, { x: LX + 7.95, y: 2.75, w: 4.2, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
+        const rowsD = Z.d.slice().sort((a, b) => b.pop - a.pop).slice(0, 10).map(x => { const o = A.d.find(y => y.name === x.name), me = x.name === d3, st = me ? { bold: true, fill: { color: GOLDBG } } : {};
+          return [cell(x.name, Object.assign({ align: 'left' }, st)), cell(n(x.pop), st), cell(n(x.hh), st), cell(x.hh ? (x.pop / x.hh).toFixed(2) : '-', st), cell(o ? pt(pct(x.pop, o.pop)) : '-', st)]; });
+        tbl(sl, [['동', '인구', '세대수', '세대당', `인구 ${yrs}년`].map(TH)].concat(rowsD), LX + 7.95, 3.05, 4.2, [1.15, 0.85, 0.85, 0.6, 0.75], 8.5, 0.29);
+        sl.addText([`행정안전부 주민등록 인구 및 세대현황(법정동 기준, 매년 ${String(pd.ym0).slice(4).replace(/^0/, '')}월 말 기준, 2022.10 이후만 조회 가능). 거주자·거주불명자·재외국민을 포함합니다.`, '주민등록 기준이라 실거주 인구와 다를 수 있고, 연령 구성·전입전출은 이 쪽에 포함하지 않았습니다.'].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
+          { x: LX, y: 6.3, w: LW, h: 0.62, fontFace: F, fontSize: 8.5, color: MUTE, margin: 0, valign: 'top', paraSpaceAfter: 3, isTextBox: true }); } }
     // 추이
     const ms = []; for (let k = 23; k >= 0; k--) { const d = new Date(S.asOf.getFullYear(), S.asOf.getMonth() - k, 1); ms.push(d.getFullYear() * 100 + d.getMonth() + 1); }
     const allPairs = pick.flatMap(r => r.all.map(t => [r, t]));
@@ -1028,6 +1075,33 @@ async function makeOffiReport() {
       tbl(sl, mk(er.R), LX + 6.25, 1.45, 5.9, [0.75, 1.5, 2.2, 0.8, 0.65], 9, 0.34);
       sl.addText(['거리는 대상지에서 직선거리이고, 도보 시간은 80m/분으로 환산한 추정입니다(실제 경로·고저차와 다릅니다).', '카카오맵 장소 검색 결과 기준이며, 개수는 최대 45곳까지만 집계됩니다. 학교 배정(학구도)은 따로 확인해야 합니다.', '버스·광역교통(GTX 등)과 개발계획은 이 쪽에 포함하지 않았습니다.'].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
         { x: LX + 6.25, y: 4.7, w: 5.9, h: 1.6, fontFace: F, fontSize: 9, color: MUTE, margin: 0, valign: 'top', paraSpaceAfter: 4, isTextBox: true }); }
+    // 인구·세대 (행정안전부 주민등록)
+    status('기초자료 준비 중… 인구·세대 조회');
+    { let pd = null, perr = '';
+      try { pd = await popData(reg); } catch (e) { perr = e.message || '조회하지 못했습니다'; }
+      const lab = ym => `'${String(ym).slice(2, 4)}.${String(ym).slice(4)}`, pct = (a, b) => b ? (a / b - 1) * 100 : null, pt = v => v == null ? '-' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+      if (!pd || pd.ser.length < 2 || !pd.ser[pd.ser.length - 1].s) {
+        sl = page('인구·세대 자료를 불러오지 못했습니다', 'DEMAND · POPULATION');
+        sl.addText(perr || '조회 결과가 없습니다.', { x: LX, y: 1.5, w: LW, h: 0.4, fontFace: F, fontSize: 11, color: MUTE, margin: 0, isTextBox: true }); }
+      else {
+        const ser = pd.ser, A = ser[0], Z = ser[ser.length - 1], yrs = Math.round((Z.ym - A.ym) / 100), pop = ser.map(x => x.s ? x.s.pop : 0), hhs = ser.map(x => x.s ? x.s.hh : 0);
+        const gp = pct(Z.s.pop, A.s.pop), gh = pct(Z.s.hh, A.s.hh), per = Z.s.hh ? Z.s.pop / Z.s.hh : 0, per0 = A.s.hh ? A.s.pop / A.s.hh : 0;
+        const mine = Z.d.find(x => x.name === d3) || null, mine0 = mine ? A.d.find(x => x.name === d3) : null;
+        sl = page(`${pd.sggName} 인구 ${n(Z.s.pop)}명(${yrs}년 ${pt(gp)}), 세대수 ${n(Z.s.hh)}세대(${pt(gh)}) · 세대당 ${per.toFixed(2)}명`, 'DEMAND · POPULATION');
+        const kg = 0.21, kw3 = (LW - kg * 2) / 3;
+        kpi(sl, LX, 1.4, kw3, `${pd.sggName} 주민등록 인구`, `${n(Z.s.pop)}명`, `${lab(A.ym)} 대비 ${pt(gp)} (${n(Z.s.pop - A.s.pop)}명)`);
+        kpi(sl, LX + kw3 + kg, 1.4, kw3, `${pd.sggName} 세대수`, `${n(Z.s.hh)}세대`, `${lab(A.ym)} 대비 ${pt(gh)} · 세대당 ${per0.toFixed(2)} → ${per.toFixed(2)}명`);
+        kpi(sl, LX + (kw3 + kg) * 2, 1.4, kw3, mine ? `${d3} 인구 · 세대수` : '대상지 동', mine ? `${n(mine.pop)}명 · ${n(mine.hh)}세대` : '-', mine && mine0 ? `${lab(A.ym)} 대비 인구 ${pt(pct(mine.pop, mine0.pop))}, 세대수 ${pt(pct(mine.hh, mine0.hh))}` : (mine ? '비교 시점 자료 없음' : '대상지 동을 목록에서 찾지 못함'));
+        sl.addText(`${pd.sggName} 인구 (명)`, { x: LX, y: 2.75, w: 3.7, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
+        sl.addChart(pres.ChartType.bar, [{ name: '인구', labels: ser.map(x => lab(x.ym)), values: pop }], Object.assign(chartBase(), { x: LX, y: 3.05, w: 3.75, h: 3.1, barDir: 'col', chartColors: [NAVY], showValue: true, dataLabelFormatCode: '#,##0', dataLabelFontSize: 7.5, barGapWidthPct: 45, valAxisMinVal: Math.floor(Math.min(...pop) * 0.9 / 1000) * 1000 }));
+        sl.addText(`${pd.sggName} 세대수 (세대)`, { x: LX + 3.95, y: 2.75, w: 3.7, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
+        sl.addChart(pres.ChartType.bar, [{ name: '세대수', labels: ser.map(x => lab(x.ym)), values: hhs }], Object.assign(chartBase(), { x: LX + 3.95, y: 3.05, w: 3.75, h: 3.1, barDir: 'col', chartColors: [GOLD], showValue: true, dataLabelFormatCode: '#,##0', dataLabelFontSize: 7.5, barGapWidthPct: 45, valAxisMinVal: Math.floor(Math.min(...hhs) * 0.9 / 1000) * 1000 }));
+        sl.addText(`읍면동별 (${lab(Z.ym)} · ${lab(A.ym)} 대비)`, { x: LX + 7.95, y: 2.75, w: 4.2, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
+        const rowsD = Z.d.slice().sort((a, b) => b.pop - a.pop).slice(0, 10).map(x => { const o = A.d.find(y => y.name === x.name), me = x.name === d3, st = me ? { bold: true, fill: { color: GOLDBG } } : {};
+          return [cell(x.name, Object.assign({ align: 'left' }, st)), cell(n(x.pop), st), cell(n(x.hh), st), cell(x.hh ? (x.pop / x.hh).toFixed(2) : '-', st), cell(o ? pt(pct(x.pop, o.pop)) : '-', st)]; });
+        tbl(sl, [['동', '인구', '세대수', '세대당', `인구 ${yrs}년`].map(TH)].concat(rowsD), LX + 7.95, 3.05, 4.2, [1.15, 0.85, 0.85, 0.6, 0.75], 8.5, 0.29);
+        sl.addText([`행정안전부 주민등록 인구 및 세대현황(법정동 기준, 매년 ${String(pd.ym0).slice(4).replace(/^0/, '')}월 말 기준, 2022.10 이후만 조회 가능). 거주자·거주불명자·재외국민을 포함합니다.`, '주민등록 기준이라 실거주 인구와 다를 수 있고, 연령 구성·전입전출은 이 쪽에 포함하지 않았습니다.'].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
+          { x: LX, y: 6.3, w: LW, h: 0.62, fontFace: F, fontSize: 8.5, color: MUTE, margin: 0, valign: 'top', paraSpaceAfter: 3, isTextBox: true }); } }
     // 추이
     const ms = []; for (let k = 23; k >= 0; k--) { const d = new Date(S.asOf.getFullYear(), S.asOf.getMonth() - k, 1); ms.push(d.getFullYear() * 100 + d.getMonth() + 1); }
     const allPairs = rows.flatMap(r => r.all.map(t => [r, t]));
