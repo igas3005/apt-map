@@ -872,7 +872,7 @@ async function makeReport() {
         const rowsD = Z.d.slice().sort((a, b) => b.pop - a.pop).slice(0, 10).map(x => { const o = A.d.find(y => y.name === x.name), me = x.name === d3, st = me ? { bold: true, fill: { color: GOLDBG } } : {};
           return [cell(x.name, Object.assign({ align: 'left' }, st)), cell(n(x.pop), st), cell(n(x.hh), st), cell(x.hh ? (x.pop / x.hh).toFixed(2) : '-', st), cell(o ? pt(pct(x.pop, o.pop)) : '-', st)]; });
         tbl(sl, [['동', '인구', '세대수', '세대당', `인구 ${yrs}년`].map(TH)].concat(rowsD), LX + 7.95, 3.05, 4.2, [1.15, 0.85, 0.85, 0.6, 0.75], 8.5, 0.29);
-        sl.addText([`행정안전부 주민등록 인구 및 세대현황(법정동 기준, 매년 ${String(pd.ym0).slice(4).replace(/^0/, '')}월 말 기준, 2022.10 이후만 조회 가능). 거주자·거주불명자·재외국민을 포함합니다.`, '주민등록 기준이라 실거주 인구와 다를 수 있고, 연령 구성·전입전출은 이 쪽에 포함하지 않았습니다.'].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
+        sl.addText([`행정안전부 주민등록 인구 및 세대현황(법정동 기준, 매년 ${String(pd.ym0).slice(4).replace(/^0/, '')}월 말 기준, 2022.10 이후만 조회 가능). 거주자·거주불명자·재외국민을 포함합니다.`, '주민등록 기준이라 실거주 인구와 다를 수 있고, 전입전출(인구 이동)은 포함하지 않았습니다. 연령 구성은 다음 쪽에 있습니다.'].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
           { x: LX, y: 6.3, w: LW, h: 0.62, fontFace: F, fontSize: 8.5, color: MUTE, margin: 0, valign: 'top', paraSpaceAfter: 3, isTextBox: true }); } }
     const KK = { pres, page, kpi, tbl, cell, TH, chartBase, F, LX, LW, NAVY, INK, MUTE, GOLD, GOLDBG, n, reg, d2, d3, sido: SIDO_OF[code5.slice(0, 2)] };
     status('기초자료 준비 중… 연령 구성 조회'); await addAgeSlide(KK, popRes);
@@ -1170,7 +1170,7 @@ async function makeOffiReport() {
         const rowsD = Z.d.slice().sort((a, b) => b.pop - a.pop).slice(0, 10).map(x => { const o = A.d.find(y => y.name === x.name), me = x.name === d3, st = me ? { bold: true, fill: { color: GOLDBG } } : {};
           return [cell(x.name, Object.assign({ align: 'left' }, st)), cell(n(x.pop), st), cell(n(x.hh), st), cell(x.hh ? (x.pop / x.hh).toFixed(2) : '-', st), cell(o ? pt(pct(x.pop, o.pop)) : '-', st)]; });
         tbl(sl, [['동', '인구', '세대수', '세대당', `인구 ${yrs}년`].map(TH)].concat(rowsD), LX + 7.95, 3.05, 4.2, [1.15, 0.85, 0.85, 0.6, 0.75], 8.5, 0.29);
-        sl.addText([`행정안전부 주민등록 인구 및 세대현황(법정동 기준, 매년 ${String(pd.ym0).slice(4).replace(/^0/, '')}월 말 기준, 2022.10 이후만 조회 가능). 거주자·거주불명자·재외국민을 포함합니다.`, '주민등록 기준이라 실거주 인구와 다를 수 있고, 연령 구성·전입전출은 이 쪽에 포함하지 않았습니다.'].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
+        sl.addText([`행정안전부 주민등록 인구 및 세대현황(법정동 기준, 매년 ${String(pd.ym0).slice(4).replace(/^0/, '')}월 말 기준, 2022.10 이후만 조회 가능). 거주자·거주불명자·재외국민을 포함합니다.`, '주민등록 기준이라 실거주 인구와 다를 수 있고, 전입전출(인구 이동)은 포함하지 않았습니다. 연령 구성은 다음 쪽에 있습니다.'].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
           { x: LX, y: 6.3, w: LW, h: 0.62, fontFace: F, fontSize: 8.5, color: MUTE, margin: 0, valign: 'top', paraSpaceAfter: 3, isTextBox: true }); } }
     const KK = { pres, page, kpi, tbl, cell, TH, chartBase, F, LX, LW, NAVY, INK, MUTE, GOLD, GOLDBG, n, reg, d2, d3, sido: SIDO_OF[code5.slice(0, 2)] };
     status('기초자료 준비 중… 연령 구성 조회'); await addAgeSlide(KK, popRes);
