@@ -21,7 +21,7 @@ const BANDS = [
   { k: 'l', t: '85~102㎡ (중대형)', a: 85.5, b: 102.5 },
   { k: 'xl', t: '102㎡~ (대형)', a: 102.5, b: 1e9 },
 ];
-const S = { asset: 'apt', tab: 'trade', center: null, rad: 1000, months: 12, band: 'all', metric: 'latest', sort: 'dist',
+const S = { oyear: 0, asset: 'apt', tab: 'trade', center: null, rad: 1000, months: 12, band: 'all', metric: 'latest', sort: 'dist',
   list: [], sum: new Map(), sel: null, dtype: null, ov: [], asOf: new Date(), hasData: false, token: 0 };
 let C = [], map, circle, centerMarker, geocoder, places;
 const TR = new Map();               // 시군구코드 -> {c:{id:[[ymd,area,floor,amt]]}} | null
@@ -838,10 +838,10 @@ async function makeOffiReport() {
       radUsed = R; status(`오피스텔 기초자료 준비 중… 반경 ${rTxt(R)} 실거래 조회`);
       const codes = await regionsAround(S.center, R), err = await ensureOffi(codes, 24); if (err) throw new Error(offiErrText(err));
       status(`오피스텔 기초자료 준비 중… 반경 ${rTxt(R)} 위치 확인`);
-      found = (await locateOffi(codes, tok, cut2, R)).out; if (tok !== S.token) throw new Error('다른 검색이 시작돼 만들기를 멈췄어요. 다시 눌러 주세요.');
+      found = (await locateOffi(codes, tok, cut2, R)).out.filter(i => passYear(i.g)); if (tok !== S.token) throw new Error('다른 검색이 시작돼 만들기를 멈췄어요. 다시 눌러 주세요.');
       if (found.length >= 3) break;
     }
-    if (!found.length) throw new Error(`반경 ${rTxt(radUsed)} 안에 최근 2년 거래된 오피스텔이 없어요.`);
+    if (!found.length) throw new Error(`반경 ${rTxt(radUsed)} 안에 ${S.oyear ? '준공 ' + S.oyear + '년 이내 ' : ''}최근 2년 거래된 오피스텔이 없어요.`);
     let pick = found.slice().sort((a, b) => a.d - b.d); const cutN = pick.length > 30 ? pick.length - 30 : 0; pick = pick.slice(0, 30);
     { const need = pick.map(r => r.g).filter(g => BLD[obkey(g)] === undefined); let k = 0, dn = 0;
       await Promise.all(Array.from({ length: 3 }, async () => { while (k < need.length && !bldErr) { const g = need[k++];
@@ -925,7 +925,7 @@ async function makeOffiReport() {
     sl.addShape(pres.ShapeType.rect, { x: 8.1, y: 2.72, w: 4.68, h: 4.2, fill: { color: BG }, line: { color: BG, width: 0 } });
     sl.addText('조사 기준', { x: 8.3, y: 2.85, w: 4.4, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
     sl.addText([`범위: 대상지 반경 ${radTxt} 안 오피스텔 (선택 반경 ${radAsk}${radUsed > S.rad ? ', 비교 대상이 3곳 미만이라 확대' : ''})`, '실거래: 건물별 최근 1년, 없으면 최근 2년 (국토부 오피스텔 매매 신고 자료)', '면적·평당가: 전용면적 기준 (소수점 버림). 오피스텔은 전용률이 낮아 공급면적으로 환산하지 않음',
-      `면적대: ${OBANDS.slice(1).map(b => b.t).join(' / ')}`, `분양: 청약홈 최근 2년 공고, 반경 ${saleRTxt} 이내 ${saleFar ? '없음 → 같은 시·군 가까운 순 ' : ''}${sales.length}건`].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
+      `연차: ${S.oyear ? '준공 ' + S.oyear + '년 이내만 포함' : '준공연도 제한 없음'}`, `면적대: ${OBANDS.slice(1).map(b => b.t).join(' / ')}`, `분양: 청약홈 최근 2년 공고, 반경 ${saleRTxt} 이내 ${saleFar ? '없음 → 같은 시·군 가까운 순 ' : ''}${sales.length}건`].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
       { x: 8.3, y: 3.2, w: 4.33, h: 3.6, fontFace: F, fontSize: 10, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 8, isTextBox: true });
     // 위치도
     sl = page(`대상지에서 ${dTxt(far)} 안에 오피스텔 ${mapPts.length}곳, 분양 단지 ${salePts.length}곳이 분포`, 'LOCATION');
@@ -1108,7 +1108,9 @@ const OBANDS = [
 ];
 const OSIDO = Object.assign({ '26': '부산', '27': '대구', '29': '광주', '30': '대전', '31': '울산', '36': '세종' }, SIDO_OF);
 const OFFI = new Map(), ODONE = new Set(), OPEND = new Map(), OREG = new Map(), OREGN = new Map();
-const OF = { list: [], sum: new Map(), sel: null, dtype: null, ov: [], loading: false };
+const OF = { all: [], list: [], sum: new Map(), sel: null, dtype: null, ov: [], loading: false };
+const yearOfG = g => { const b = BLD[obkey(g)]; return (b && b[1]) || g.by || 0; };
+const passYear = g => !S.oyear || (yearOfG(g) > 0 && S.asOf.getFullYear() - yearOfG(g) <= S.oyear);   // 준공연도 필터: N년 이내 (연도 모르면 제외)
 const obandOf = () => OBANDS.find(b => b.k === S.band) || OBANDS[0];
 const fl2 = a => Math.floor(a + 1e-6);          // 전용면적은 소수점 버림으로 묶는다 (59.97→59, 84.97→84)
 async function pool(arr, n, fn) { let i = 0; await Promise.all(Array.from({ length: n }, async () => { while (i < arr.length) { const x = arr[i++]; await fn(x); } })); }
@@ -1204,7 +1206,7 @@ function offiErrText(e) {
 }
 async function refreshOffi(fit) {
   if (!S.center) return;
-  const tok = ++S.token; OF.list = []; OF.sum = new Map(); OF.sel = null; $('#detail').hidden = true; OF.loading = !!KEY;
+  const tok = ++S.token; OF.all = []; OF.list = []; OF.sum = new Map(); OF.sel = null; $('#detail').hidden = true; OF.loading = !!KEY;
   renderOffiList(); renderOffiPins();
   if (!S.hasData) { status('아래에 국토부 인증키를 입력하면 시세가 표시돼요.'); return; }
   status('주변 시군구 확인 중…');
@@ -1214,7 +1216,7 @@ async function refreshOffi(fit) {
   if (err) { OF.loading = false; status(offiErrText(err), true); renderOffiList(); return; }
   status('오피스텔 위치 확인 중…');
   const { out, miss } = await locateOffi(codes, tok); if (tok !== S.token) return;
-  OF.loading = false; OF.list = out;
+  OF.loading = false; OF.all = out; OF.list = out;
   status(miss ? `지번으로 위치를 찾지 못한 ${miss}곳은 제외했어요.` : '');
   recomputeOffi(); if (fit && circle) map.setBounds(circle.getBounds());
   loadOffiBld(tok);
@@ -1294,7 +1296,7 @@ function renderOffiDetail() {
 let FOOT0 = '';
 function setAsset(a) {
   if (S.asset === a) return;
-  S.asset = a; const offi = a === 'offi';
+  S.asset = a; const offi = a === 'offi'; $('#ylab').style.display = offi ? '' : 'none';
   document.querySelectorAll('[data-asset]').forEach(b => b.classList.toggle('on', b.dataset.asset === a));
   if (!FOOT0) FOOT0 = $('#foot').textContent;
   $('#foot').textContent = offi ? '국토교통부 오피스텔 매매 실거래가를 실시간 조회 · 해제 거래 제외 · 신고 지번을 좌표로 바꿔 표시(위치 약간 오차 가능) · 참고용' : FOOT0;
@@ -1439,6 +1441,8 @@ function bind() {
   $('#band').onchange = () => { S.band = $('#band').value; S.dtype = null; recompute(); };
   $('#metric').onchange = () => { S.metric = $('#metric').value; recompute(); };
   $('#sort').onchange = () => { S.sort = $('#sort').value; recompute(); };
+  { const yl = document.createElement('label'); yl.id = 'ylab'; yl.style.display = 'none'; yl.innerHTML = 'PPT 준공연도<select id="oyear"><option value="0">제한 없음</option><option value="3">3년 이내</option><option value="5">5년 이내</option><option value="10">10년 이내</option></select>';
+    yl.style.gridColumn = '1/-1'; yl.dataset.pending = '1'; $('.ctrl').appendChild(yl); $('#oyear').onchange = () => { S.oyear = +$('#oyear').value; }; }
   $('#go').onclick = () => doSearch(true);
   const rb = document.createElement('button'); rb.id = 'rpt'; rb.textContent = '이 위치의 반경 기준 시장조사 기초자료 PPT 만들기'; rb.style.cssText = 'grid-column:1/-1;padding:7px'; $('.ctrl').appendChild(rb); rb.onclick = () => (S.asset === 'offi' ? makeOffiReport() : makeReport());
   { const fl = document.createElement('label'); fl.id = 'rfl'; fl.style.cssText = 'grid-column:1/-1'; fl.innerHTML = 'PPT 글꼴 <select id="rfont"><option value="ns">나눔스퀘어</option><option value="kp">KoPubWorld돋움</option><option value="mg">맑은 고딕</option></select> <small style="color:#6b7785">보는 PC에 설치된 글꼴만 적용돼요</small>'; $('.ctrl').appendChild(fl);
