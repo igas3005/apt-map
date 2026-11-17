@@ -569,7 +569,7 @@ async function mapImage(center, pts, W, H, pts2) {
     const mpp = 156543.03392 * Math.cos(center.lat * Math.PI / 180) / 2 ** z, steps = [100, 200, 500, 1000, 2000, 5000], sm = steps.find(v => v / mpp >= 110) || 5000, sw = sm / mpp;
     g.fillStyle = 'rgba(255,255,255,.9)'; g.fillRect(18, H - 54, sw + 24, 38); g.fillStyle = '#1B2430'; g.fillRect(30, H - 28, sw, 4); g.font = '17px sans-serif'; g.textAlign = 'left'; g.fillText(sm >= 1000 ? sm / 1000 + 'km' : sm + 'm', 30, H - 40);
     if (withTiles) { g.font = '15px sans-serif'; const t = '© OpenStreetMap contributors', w2 = g.measureText(t).width + 16; g.fillStyle = 'rgba(255,255,255,.85)'; g.fillRect(W - w2 - 8, H - 32, w2, 24); g.fillStyle = '#333'; g.fillText(t, W - w2, H - 20); }
-    try { return { data: cv.toDataURL('image/png'), tiles: withTiles && got > 0 }; } catch (e) { return null; }
+    try { return { data: (withTiles && got > 0) ? cv.toDataURL('image/jpeg', 0.88) : cv.toDataURL('image/png'), tiles: withTiles && got > 0 }; } catch (e) { return null; }
   };
   let r = null; try { r = await draw(true); } catch (e) {}
   if (!r || !r.tiles) r = await draw(false);
@@ -896,7 +896,7 @@ async function makeOffiReport() {
     const chgTxt = chg == null ? '비교 불가' : (chg >= 0 ? '+' : '') + chg.toFixed(1) + '%';
     const bandSt = b => { const v = pairs1.filter(([r, t]) => t[1] >= b.a && t[1] < b.b); return v.length ? { b, cnt: v.length, med: med(v.map(([r, t]) => t[3])), ppy: med(v.map(([r, t]) => ppy(t))) } : null; };
     const top2 = OBANDS.slice(1).map(bandSt).filter(Boolean).sort((a, b) => b.cnt - a.cnt).slice(0, 2);
-    const sumOf = r => { const b = dominant(r.tr, true), am = b.v.map(t => t[3]); return { type: b.k, cnt: r.tr.length, med: med(am), max: Math.max(...am), min: Math.min(...am), ppy: med(b.v.map(ppy)) }; };
+    const sumOf = r => { const b = dominant(r.tr, true), am = b.v.map(t => t[3]); return { type: b.k, cnt: b.v.length, med: med(am), max: Math.max(...am), min: Math.min(...am), ppy: med(b.v.map(ppy)) }; };
     // 표지
     status('오피스텔 기초자료 준비 중… 위치도 작성');
     const mapPts = rows.slice(0, 30), salePts = sales.slice(0, 8), mi = await mapImage(S.center, mapPts.map(r => ({ lat: r.g.p[0], lon: r.g.p[1] })), 1640, 1100, salePts.map(x => ({ lat: x.lat, lon: x.lon }))), far = Math.max(...mapPts.map(r => r.d));
