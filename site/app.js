@@ -290,7 +290,7 @@ async function locEnv(c) {
   const cn = x => String(x.category_name || ''), sch = re => x => re.test(cn(x)) && !/학원|교습|어린이집/.test(cn(x));
   const [sub, el, mi, hi, aca, kid, mart, dept, hosp, park] = await Promise.all([
     kakaoNear({ cat: 'SW8' }, c, 2000), kakaoNear({ kw: '초등학교' }, c, 1500, sch(/초등학교/)), kakaoNear({ kw: '중학교' }, c, 2000, sch(/중학교/)), kakaoNear({ kw: '고등학교' }, c, 3000, sch(/고등학교/)),
-    kakaoNear({ cat: 'AC5' }, c, 1000), kakaoNear({ cat: 'PS3' }, c, 500), kakaoNear({ cat: 'MT1' }, c, 3000), kakaoNear({ kw: '백화점' }, c, 5000, x => /백화점/.test(cn(x) + x.place_name)),
+    kakaoNear({ cat: 'AC5' }, c, 1000), kakaoNear({ cat: 'PS3' }, c, 500), kakaoNear({ cat: 'MT1' }, c, 3000, x => /대형마트/.test(cn(x))), kakaoNear({ kw: '백화점' }, c, 5000, x => /백화점/.test(cn(x) + x.place_name)),
     kakaoNear({ kw: '종합병원' }, c, 5000, x => /종합병원/.test(cn(x))), kakaoNear({ kw: '공원' }, c, 1500, x => /공원/.test(cn(x)) && !/주차/.test(cn(x))) ]);
   return { sub, el, mi, hi, aca, kid, mart, dept, hosp, park };
 }
@@ -298,7 +298,7 @@ const walkMin = d => Math.max(1, Math.round(d / 80)), dm = d => d < 1000 ? Math.
 function envRows(env) {   // [구분, 시설, 이름, 거리, 도보] 목록과 제목 문장을 만든다
   const nearest = (r, k, grp, lab, rad) => { const arr = r ? r.items.slice(0, k) : null; if (!arr) return [[grp, lab, '조회하지 못함', '-', '-']]; if (!arr.length) return [[grp, lab, `반경 ${dm(rad)} 안에 없음`, '-', '-']];
     return arr.map((x, i) => [i ? '' : grp, i ? '' : lab, String(x.place_name).slice(0, 18), dm(+x.distance), walkMin(+x.distance) + '분']); };
-  const count = (r, grp, lab, rad, unit) => [[grp, lab, r ? `반경 ${dm(rad)} 안 ${r.total > 45 ? '45+' : r.total}${unit}` : '조회하지 못함', '', '']];
+  const count = (r, grp, lab, rad, unit) => [[grp, lab, r ? `반경 ${dm(rad)} 안 ${r.total >= 45 ? '45' : r.total}${unit}${r.total >= 45 ? ' 이상' : ''}` : '조회하지 못함', '', '']];
   const L = [].concat(nearest(env.sub, 3, '교통', '지하철역', 2000), nearest(env.el, 2, '교육', '초등학교', 1500), nearest(env.mi, 1, '', '중학교', 2000), nearest(env.hi, 1, '', '고등학교', 3000), count(env.aca, '', '학원', 1000, '곳'), count(env.kid, '', '어린이집·유치원', 500, '곳'));
   const R = [].concat(nearest(env.mart, 2, '생활', '대형마트', 3000), nearest(env.dept, 1, '', '백화점', 5000), nearest(env.hosp, 1, '의료', '종합병원', 5000), nearest(env.park, 2, '여가', '공원', 1500));
   const f = (r) => r && r.items[0] ? r.items[0] : null, s1 = f(env.sub), e1 = f(env.el), m1 = f(env.mart);
