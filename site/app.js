@@ -290,7 +290,7 @@ async function locEnv(c) {
   const cn = x => String(x.category_name || ''), sch = re => x => re.test(cn(x)) && !/학원|교습|어린이집/.test(cn(x));
   const [sub, el, mi, hi, aca, kid, mart, dept, hosp, park] = await Promise.all([
     kakaoNear({ cat: 'SW8' }, c, 2000), kakaoNear({ kw: '초등학교' }, c, 1500, sch(/초등학교/)), kakaoNear({ kw: '중학교' }, c, 2000, sch(/중학교/)), kakaoNear({ kw: '고등학교' }, c, 3000, sch(/고등학교/)),
-    kakaoNear({ cat: 'AC5' }, c, 1000), kakaoNear({ cat: 'PS3' }, c, 500), kakaoNear({ cat: 'MT1' }, c, 3000, x => /대형마트/.test(cn(x))), kakaoNear({ kw: '백화점' }, c, 5000, x => /백화점/.test(cn(x) + x.place_name)),
+    kakaoNear({ cat: 'AC5' }, c, 1000), kakaoNear({ cat: 'PS3' }, c, 500), kakaoNear({ cat: 'MT1' }, c, 3000, x => /대형마트/.test(cn(x))), kakaoNear({ kw: '백화점' }, c, 5000, x => /백화점/.test(cn(x)) && !/혼수|이불|침구|커튼|커텐|의류|아울렛|매장\s*$/.test(String(x.place_name || ''))),
     kakaoNear({ kw: '종합병원' }, c, 5000, x => /종합병원/.test(cn(x))), kakaoNear({ kw: '공원' }, c, 1500, x => /공원/.test(cn(x)) && !/주차/.test(cn(x))) ]);
   return { sub, el, mi, hi, aca, kid, mart, dept, hosp, park };
 }
