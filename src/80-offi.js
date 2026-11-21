@@ -453,7 +453,7 @@ function setAsset(a) {
   $('#foot').textContent = offi
     ? '국토교통부 오피스텔 매매 실거래가를 실시간 조회 · 해제 거래 제외 · 신고 지번을 좌표로 바꿔 표시(위치 약간 오차 가능) · 참고용'
     : lc
-      ? `국토교통부 ${LC_KIND[a].name} 매매 실거래가를 실시간 조회 · 해제 거래 제외 · 지번 일부 비공개라 법정동 단위로 집계 · 참고용`
+      ? `국토교통부 ${LC_KIND[a].name} 매매 실거래가를 실시간 조회 · 해제 거래 제외 · 지번이 공개된 거래는 필지 위치에, 가려진 거래는 법정동 단위로 표시 · 참고용`
       : FOOT0;
   $('#band').innerHTML = (offi ? OBANDS : lc ? LC_KIND[a].bands : BANDS).map(b => `<option value="${b.k}">${b.t}</option>`).join('');
   S.band = 'all';
