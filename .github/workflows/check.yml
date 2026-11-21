@@ -1,0 +1,21 @@
+name: 코드 검사
+
+# 배포 전 확인용: 브랜치에 올리거나 PR을 열면 app.js를 만들어 문법 오류가 없는지 본다 (배포는 하지 않음).
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: app.js 만들기 + 문법 검사
+        run: |
+          bash scripts/build.sh
+          node --check site/app.js
