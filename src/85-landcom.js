@@ -225,7 +225,8 @@ async function locateLC(kind, codes, tok) {
     const p = LCDONG.get(k);
     if (!p || hav(S.center.lat, S.center.lon, p[0], p[1]) <= S.rad + 3000) near.push(...list);
   });
-  await vwEstimate(kind, near, tok); // 가려진 지번을 필지 면적과 대조해 추정 (브이월드 키가 있을 때)
+  await vwEstimate(kind, near, tok); // 토지: 가려진 지번을 필지 면적과 대조해 추정 (브이월드 키가 있을 때)
+  await nrgEstimate(kind, near, tok); // 상가 통건물: 건축물대장 면적·연도와 대조해 추정
   // 2) 필지 위치
   const todo = near.filter(g => !g.masked && g.pe === undefined);
   let n = 0;
@@ -289,7 +290,7 @@ async function refreshLC(fit) {
     const v = LC.vw || {},
       m = [];
     if (VWERR.msg) m.push(VWERR.msg + ' — 지번 추정 없이 표시해요.');
-    else if (v.est || v.cand) m.push(`가려진 지번 중 ${v.est}건은 필지로 추정했고 ${v.cand}건은 후보가 여러 개라 동 묶음에 남겼어요.`);
+    else if (v.est || v.cand) m.push(`가려진 거래 중 ${v.est}건은 필지로 추정했고 ${v.cand}건은 후보가 여러 개라 동 묶음에 남겼어요.`);
     if (miss) m.push(`주소로 위치를 찾지 못한 ${miss}곳은 제외했어요.`);
     status(m.join(' '), !!VWERR.msg);
   }
@@ -364,7 +365,7 @@ function renderLCList() {
       return `<div class="item${LC.sel === g.key ? ' sel' : ''}" data-lid="${esc(g.key)}"><div class="n"><div class="nm">${esc(lcName(g))}</div><div class="ad">${esc(g.sgg)} · 대상지에서 ${g.masked ? '동 중심까지 ' : ''}${lcDist(it.d)}</div></div>${px}</div>`;
     })
     .join('');
-  h += `<div class="note" style="margin:10px 14px">지번이 공개된 거래는 해당 지번의 위치에, 지번이 가려진 거래(예: 1**)는 법정동 단위로 묶어 동 중심에 표시해요. 토지는 브이월드 키가 있으면 가려진 지번을 필지 면적과 대조해 (추정)으로 찍어요. 반경 안에 있는 곳만 보여요. 위치는 지번 주소를 지도 검색으로 변환한 값이라 실제 필지와 조금 다를 수 있어요.</div>`;
+  h += `<div class="note" style="margin:10px 14px">지번이 공개된 거래는 해당 지번의 위치에, 지번이 가려진 거래(예: 1**)는 법정동 단위로 묶어 동 중심에 표시해요. 토지는 브이월드 키가 있으면, 상가 통건물은 건축물대장과 면적을 대조해 가려진 지번을 (추정)으로 찍어요. 반경 안에 있는 곳만 보여요. 위치는 지번 주소를 지도 검색으로 변환한 값이라 실제 필지와 조금 다를 수 있어요.</div>`;
   el.innerHTML = h;
 }
 function openLC(key, pan) {
@@ -456,7 +457,7 @@ function renderLCDetail() {
         .map(t =>
           land
             ? `<tr><td>${ds(t.ymd)}</td><td>${esc(t.jibun)}${t.est ? '<br><small>추정</small>' : t.cand ? `<br><small title="${esc(t.candTxt)}">후보 ${t.cand}필지</small>` : ''}</td><td>${esc(t.kind)}</td><td>${esc(t.zone)}</td><td>${Math.round(t.area).toLocaleString('ko-KR')}㎡<br><small>${(t.area / PY).toFixed(0)}평${t.share ? ' · 지분' : ''}</small></td><td><b>${eokFull(t.amt)}</b></td><td>${Math.round(lcUnit(t)).toLocaleString('ko-KR')}만</td></tr>`
-            : `<tr><td>${ds(t.ymd)}</td><td>${esc(t.jibun)}</td><td>${esc(t.kind)}<br><small>${esc(t.zone)}${t.by ? ' · ' + t.by + '년' : ''}</small></td><td>${Math.round(t.bArea).toLocaleString('ko-KR')} / ${t.pArea ? Math.round(t.pArea).toLocaleString('ko-KR') : '-'}㎡</td><td>${t.floor || '-'}</td><td><b>${eokFull(t.amt)}</b></td><td>${Math.round(lcUnit(t)).toLocaleString('ko-KR')}만</td></tr>`,
+            : `<tr><td>${ds(t.ymd)}</td><td>${esc(t.jibun)}${t.est ? '<br><small>추정</small>' : t.cand ? `<br><small title="${esc(t.candTxt)}">후보 ${t.cand}필지</small>` : ''}</td><td>${esc(t.kind)}<br><small>${esc(t.zone)}${t.by ? ' · ' + t.by + '년' : ''}</small></td><td>${Math.round(t.bArea).toLocaleString('ko-KR')} / ${t.pArea ? Math.round(t.pArea).toLocaleString('ko-KR') : '-'}㎡</td><td>${t.floor || '-'}</td><td><b>${eokFull(t.amt)}</b></td><td>${Math.round(lcUnit(t)).toLocaleString('ko-KR')}만</td></tr>`,
         )
         .join('') +
       '</table></div>';
