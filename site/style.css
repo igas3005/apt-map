@@ -99,3 +99,4 @@ textarea{color:var(--ink);background:var(--bg);border:1px solid var(--line);bord
 .pin.lpin .nm{transform:translate(-50%,6px)}
 .lh small{color:var(--mute);font-weight:400}
 .pin.lpin.approx{outline:2px dashed rgba(255,255,255,.85);outline-offset:-3px}
+.pin.lpin.est{outline:2px dotted rgba(255,255,255,.95);outline-offset:-3px}

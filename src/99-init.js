@@ -189,6 +189,7 @@ function renderKey() {
 async function init() {
   bind();
   renderKey();
+  renderVwKey();
   renderList();
   await loadCaches();
   try {
