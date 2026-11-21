@@ -7,7 +7,7 @@ const LC_KIND = {
     api: 'https://apis.data.go.kr/1613000/RTMSDataSvcLandTrade/getRTMSDataSvcLandTrade',
     apiName: '국토교통부_토지 매매 실거래가 자료',
     months: 60,
-    mopts: [12, 36, 60],
+    mopts: [12, 24, 36, 48, 60],
     bands: [
       { k: 'all', t: '전체 지목', m: () => true },
       { k: 'dae', t: '대', m: j => j === '대' },
@@ -29,7 +29,7 @@ const LC_KIND = {
     api: 'https://apis.data.go.kr/1613000/RTMSDataSvcNrgTrade/getRTMSDataSvcNrgTrade',
     apiName: '국토교통부_상업업무용 부동산 매매 실거래가 자료',
     months: 60,
-    mopts: [12, 36, 60],
+    mopts: [12, 24, 36, 48, 60],
     bands: [
       { k: 'all', t: '전체 용도', m: () => true },
       { k: 'near', t: '근린생활시설', m: u => /근린/.test(u) },
