@@ -445,14 +445,17 @@ let FOOT0 = '';
 function setAsset(a) {
   if (S.asset === a) return;
   S.asset = a;
-  const offi = a === 'offi';
+  const offi = a === 'offi',
+    lc = a === 'land' || a === 'nrg';
   $('#ylab').style.display = offi ? '' : 'none';
   document.querySelectorAll('[data-asset]').forEach(b => b.classList.toggle('on', b.dataset.asset === a));
   if (!FOOT0) FOOT0 = $('#foot').textContent;
   $('#foot').textContent = offi
     ? '국토교통부 오피스텔 매매 실거래가를 실시간 조회 · 해제 거래 제외 · 신고 지번을 좌표로 바꿔 표시(위치 약간 오차 가능) · 참고용'
-    : FOOT0;
-  $('#band').innerHTML = (offi ? OBANDS : BANDS).map(b => `<option value="${b.k}">${b.t}</option>`).join('');
+    : lc
+      ? `국토교통부 ${LC_KIND[a].name} 매매 실거래가를 실시간 조회 · 해제 거래 제외 · 지번 일부 비공개라 법정동 단위로 집계 · 참고용`
+      : FOOT0;
+  $('#band').innerHTML = (offi ? OBANDS : lc ? LC_KIND[a].bands : BANDS).map(b => `<option value="${b.k}">${b.t}</option>`).join('');
   S.band = 'all';
   $('#band').value = 'all';
   const tb = document.querySelectorAll('.tabs button');
@@ -467,8 +470,11 @@ function setAsset(a) {
     if (rb)
       rb.textContent = offi ? '이 위치의 반경 기준 오피스텔 시장조사 기초자료 PPT 만들기' : '이 위치의 반경 기준 시장조사 기초자료 PPT 만들기';
   }
+  if (lc && S.tab === 'sale') setTab('trade');
+  setupLCControls(a);
   S.sel = null;
   OF.sel = null;
+  LC.sel = null;
   xsel = null;
   noticeSel = null;
   $('#detail').hidden = true;

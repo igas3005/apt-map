@@ -8,7 +8,7 @@ function bind() {
   const mkAssets = cls => {
     const d = document.createElement('div');
     d.className = cls;
-    d.innerHTML = '<button data-asset="apt" class="on">아파트</button><button data-asset="offi">오피스텔</button>';
+    d.innerHTML = '<button data-asset="apt" class="on">아파트</button><button data-asset="offi">오피스텔</button><button data-asset="land">토지</button><button data-asset="nrg">상가·업무</button>';
     d.addEventListener('click', e => {
       const b = e.target.closest('button');
       if (b) setAsset(b.dataset.asset);
@@ -130,7 +130,8 @@ function bind() {
   $('#list').addEventListener('click', e => {
     const d = e.target.closest('.item');
     if (!d) return;
-    if (d.dataset.oid) openOffi(d.dataset.oid, true);
+    if (d.dataset.lid) openLC(d.dataset.lid, true);
+    else if (d.dataset.oid) openOffi(d.dataset.oid, true);
     else if (d.dataset.nid) openNotice(d.dataset.nid, true);
     else if (d.dataset.sid) openSale(d.dataset.sid);
     else if (d.dataset.vid) openSilv(d.dataset.vid);

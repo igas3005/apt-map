@@ -14,6 +14,7 @@ function nearby(lat, lon, rad) {
 async function refresh(fit) {
   if (!S.center) return;
   if (S.asset === 'offi') return refreshOffi(fit);
+  if (isLC()) return refreshLC(fit);
   const tok = ++S.token;
   S.list = nearby(S.center.lat, S.center.lon, S.rad);
   renderList();
@@ -31,6 +32,7 @@ async function refresh(fit) {
 }
 function recompute() {
   if (S.asset === 'offi') return recomputeOffi();
+  if (isLC()) return recomputeLC();
   S.sum = new Map(S.list.map(i => [i.id, summarize(i.id)]));
   const key = i => {
     const s = S.sum.get(i.id);

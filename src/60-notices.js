@@ -33,7 +33,7 @@ async function loadNotices() {
 function renderNoticePins() {
   NOV.forEach(o => o.setMap(null));
   NOV = [];
-  if (S.asset === 'offi') return;
+  if (S.asset !== 'apt') return;
   for (const n of NOTICES) {
     if (!n.lat) continue;
     const el = document.createElement('div');
