@@ -76,6 +76,21 @@ function vwJsonp(params) {
     document.head.appendChild(s);
   });
 }
+// 키에 등록된 도메인 표기(도메인만 / https:// / http://)가 무엇인지 몰라서, 인증키 오류면 표기를 바꿔 다시 시도한다
+let VWDOM = '';
+async function vwCall(params) {
+  const h = location.hostname,
+    doms = VWDOM ? [VWDOM] : [h, 'https://' + h, 'http://' + h];
+  let d;
+  for (const dom of doms) {
+    d = await vwJsonp(Object.assign({ domain: dom }, params));
+    const r = d && d.response;
+    if (r && r.status === 'ERROR' && /인증키|도메인|key/i.test((r.error && (r.error.text || r.error.code)) || '')) continue;
+    VWDOM = dom;
+    return d;
+  }
+  return d;
+}
 // 폴리곤 면적(㎡) — 필지 하나는 작아서 위도 기준 평면 근사로 충분
 function vwArea(geom) {
   const rings = geom.type === 'MultiPolygon' ? geom.coordinates.map(p => p[0]) : geom.type === 'Polygon' ? [geom.coordinates[0]] : [];
@@ -106,8 +121,8 @@ async function vwParcels(code10) {
   const rows = await cachedMonth('vw', code10, '200001', async () => {
     const out = [];
     for (let page = 1; page <= 30; page++) {
-      const d = await vwJsonp({
-        service: 'data', request: 'GetFeature', data: 'LP_PA_CBND_BUBUN', key: VWKEY, domain: location.hostname,
+      const d = await vwCall({
+        service: 'data', request: 'GetFeature', data: 'LP_PA_CBND_BUBUN', key: VWKEY,
         attrFilter: 'pnu:like:' + code10, size: 1000, page, format: 'json', geometry: 'true', crs: 'EPSG:4326',
       });
       const r = d && d.response;
