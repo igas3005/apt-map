@@ -311,8 +311,8 @@ function renderLCPins() {
       sel = LC.sel === g.key,
       el = document.createElement('div');
     el.className = 'pin lpin ' + S.asset + (s ? '' : ' none') + (sel ? ' sel' : '') + (g.masked ? ' approx' : '');
-    el.innerHTML = (s ? `<small>${s.n}건 · 평당</small><b>${eok(s.med)}</b>` : '<small>조건 거래없음</small><b>-</b>') + `<i class="nm">${esc(lcName(g))}</i>`;
-    el.title = lcName(g);
+    el.innerHTML = (s ? `<small>${s.n}건 · 평당</small><b>${eok(s.med)}</b>` : '<small>조건 거래없음</small><b>-</b>') + `<i class="nm">${esc(lcName(g))} · ${lcDist(it.d)}</i>`;
+    el.title = lcName(g) + ' · 대상지에서 ' + lcDist(it.d);
     el.addEventListener('click', e => {
       e.stopPropagation();
       openLC(g.key, false);
@@ -329,6 +329,7 @@ function renderLCPins() {
     LC.ov.push(ov);
   }
 }
+const lcDist = d => (d < 1000 ? Math.round(d) + 'm' : (d / 1000).toFixed(2) + 'km');
 const lcName = g => (g.masked ? g.umd + ' (지번 비공개)' : g.umd + ' ' + g.jibun);
 const yrsTxt = () => (S.months % 12 ? S.months + '개월' : S.months / 12 + '년');
 function lcFilterTxt() {
@@ -350,7 +351,7 @@ function renderLCList() {
       const g = it.g,
         s = LC.sum.get(g.key);
       const px = s ? `<div class="px"><b>${eok(s.med)}</b><small>평당 · ${s.n}건</small></div>` : '<div class="px"><small>조건 거래 없음</small></div>';
-      return `<div class="item${LC.sel === g.key ? ' sel' : ''}" data-lid="${esc(g.key)}"><div class="n"><div class="nm">${esc(lcName(g))}</div><div class="ad">${esc(g.sgg)} · ${g.masked ? '동 중심 ' : ''}${it.d < 1000 ? Math.round(it.d) + 'm' : (it.d / 1000).toFixed(2) + 'km'}</div></div>${px}</div>`;
+      return `<div class="item${LC.sel === g.key ? ' sel' : ''}" data-lid="${esc(g.key)}"><div class="n"><div class="nm">${esc(lcName(g))}</div><div class="ad">${esc(g.sgg)} · 대상지에서 ${g.masked ? '동 중심까지 ' : ''}${lcDist(it.d)}</div></div>${px}</div>`;
     })
     .join('');
   h += `<div class="note" style="margin:10px 14px">지번이 공개된 거래는 해당 지번의 위치에, 지번이 가려진 거래(예: 1**)는 법정동 단위로 묶어 동 중심에 표시해요. 위치는 지번 주소를 지도 검색으로 변환한 값이라 실제 필지와 조금 다를 수 있어요.</div>`;
@@ -406,7 +407,7 @@ function renderLCDetail() {
   const land = S.asset === 'land',
     s = lcSum(g),
     allN = g.trades.filter(t => t.ymd >= cutoff()).length;
-  let h = `<button class="x" id="dx">닫기</button><h2>${esc(lcName(g))}</h2><div class="ad">${esc(g.sgg)} · ${esc(lcKind().name)} · ${esc(lcFilterTxt())}<br>${g.masked ? '지번이 가려진 거래를 동 단위로 묶은 값 · ' : ''}최근 ${yrsTxt()} 전체 거래 ${allN}건 중 조건에 맞는 거래 ${s ? s.n : 0}건</div>`;
+  let h = `<button class="x" id="dx">닫기</button><h2>${esc(lcName(g))}</h2><div class="ad">${esc(g.sgg)} · ${esc(lcKind().name)} · <b>대상지에서 ${g.masked ? '동 중심까지 ' : ''}${(LC.list.find(i => i.g === g) ? lcDist(LC.list.find(i => i.g === g).d) : '-')}</b><br>${esc(lcFilterTxt())}<br>${g.masked ? '지번이 가려진 거래를 동 단위로 묶은 값 · ' : ''}최근 ${yrsTxt()} 전체 거래 ${allN}건 중 조건에 맞는 거래 ${s ? s.n : 0}건</div>`;
   if (!s) h += '<div class="note">조건에 맞는 거래가 없어요. 위쪽 지목·용도·유형 필터나 기간을 바꿔 보세요.</div>';
   else {
     const u = s.arr.map(lcUnit);
