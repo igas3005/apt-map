@@ -1,4 +1,5 @@
-// 토지·상업업무용(상가) 실거래 — 지번이 일부 가려져(예: 1**) 공개되므로 필지가 아니라 법정동 단위로 모아 보여 준다.
+// 토지·상업업무용(상가) 실거래 — 지번이 온전히 공개된 거래는 필지(지번) 단위로 정확한 위치에 찍고,
+// 지번이 가려진 거래(예: 1**)는 법정동 단위로 모아 동 중심에 찍는다.
 /* ---------- 토지 · 상업업무용 ---------- */
 const LC_KIND = {
   land: {
@@ -44,7 +45,8 @@ const LC_KIND = {
   },
 };
 const isLC = () => S.asset === 'land' || S.asset === 'nrg';
-const LCD = { land: new Map(), nrg: new Map() }, // 법정동 키(시군구코드|읍면동) -> { key, code, umd, sgg, trades, p }
+const LCD = { land: new Map(), nrg: new Map() }, // 필지 키(시군구코드|읍면동|지번) -> { key, code, umd, sgg, jibun, masked, trades, pe, p }
+  LCDONG = new Map(), // 법정동 중심 좌표 캐시 (시군구코드|읍면동)
   LCDONE = new Set(),
   LCPEND = new Map();
 const LC = { list: [], sum: new Map(), sel: null, ov: [], loading: false, opt: { land: 'excl', nrg: 'col' } };
@@ -126,9 +128,10 @@ async function lcMonth(kind, f, ym) {
         : { jibun: r[1], btype: r[2], kind: r[3], zone: r[4], ymd: r[5], bArea: r[6], pArea: r[7], floor: r[8], amt: r[9], share: r[10], by: r[11] };
     const umd = r[0],
       sgg = kind === 'land' ? r[8] : r[12],
-      k = f + '|' + umd;
+      masked = !t.jibun || /\*/.test(t.jibun),
+      k = f + '|' + umd + '|' + (masked ? '' : t.jibun);
     let g = m.get(k);
-    if (!g) m.set(k, (g = { key: k, code: f, umd, sgg, trades: [], p: undefined }));
+    if (!g) m.set(k, (g = { key: k, code: f, umd, sgg, jibun: masked ? '' : t.jibun, masked, trades: [], pe: undefined, p: undefined }));
     g.trades.push(t);
   }
   LCDONE.add(kind + '|' + f + '|' + ym);
@@ -197,7 +200,9 @@ function lcSum(g) {
   return { n: arr.length, med: med(u), amt: med(arr.map(t => t.amt)), latest: Math.max(...arr.map(t => t.ymd)), arr };
 }
 
-// 법정동 위치: '시도 시군구 읍면동'을 좌표로 바꿔 동 중심으로 쓴다. 동 중심이 반경+500m 안이면 포함.
+// 위치: 지번이 온전한 필지는 '시도 시군구 읍면동 지번'을 좌표로 바꿔 정확한 위치에 찍는다.
+// 지번이 가려진 거래 묶음은 동 중심에 찍는다 (동 중심이 반경+500m 안이면 포함).
+const lcBase = g => OREGN.get(g.code) || ((OSIDO[g.code.slice(0, 2)] || '') + ' ' + g.sgg).trim();
 async function locateLC(kind, codes, tok) {
   const all = new Set();
   for (const c of codes) {
@@ -205,22 +210,40 @@ async function locateLC(kind, codes, tok) {
     (LEGACY[c] || []).forEach(x => all.add(x));
   }
   const cut = cutoff(),
-    gs = [...LCD[kind].values()].filter(g => all.has(g.code) && g.trades.some(t => t.ymd >= cut));
+    gs = [...LCD[kind].values()].filter(g => all.has(g.code) && g.trades.some(t => t.ymd >= cut)),
+    umds = new Map();
+  for (const g of gs) {
+    const k = g.code + '|' + g.umd;
+    (umds.get(k) || umds.set(k, []).get(k)).push(g);
+  }
+  // 1) 동 중심 — 반경에서 3km 넘게 떨어진 동은 필지 위치를 찾지 않는다 (동 위치를 못 찾으면 버리지 않고 포함)
+  const near = [];
+  await pool([...umds.keys()], 4, async k => {
+    if (tok !== S.token) return;
+    const list = umds.get(k);
+    if (!LCDONG.has(k)) LCDONG.set(k, await geocodeAddr((lcBase(list[0]) + ' ' + list[0].umd).replace(/\s+/g, ' ').trim()));
+    const p = LCDONG.get(k);
+    if (!p || hav(S.center.lat, S.center.lon, p[0], p[1]) <= S.rad + 3000) near.push(...list);
+  });
+  // 2) 필지 위치
+  const todo = near.filter(g => !g.masked && g.pe === undefined);
   let n = 0;
-  await pool(gs, 4, async g => {
-    if (tok !== S.token || g.p !== undefined) return;
-    g.p = await geocodeAddr(((OREGN.get(g.code) || ((OSIDO[g.code.slice(0, 2)] || '') + ' ' + g.sgg)) + ' ' + g.umd).replace(/\s+/g, ' ').trim());
-    if (gs.length > 20) status(`법정동 위치 확인 중… ${++n}/${gs.length}`);
+  await pool(todo, 4, async g => {
+    if (tok !== S.token) return;
+    g.pe = await geocodeAddr((lcBase(g) + ' ' + g.umd + ' ' + g.jibun).replace(/\s+/g, ' ').trim());
+    if (todo.length > 20) status(`필지 위치 확인 중… ${++n}/${todo.length}${todo.length > 100 ? ' (처음 한 번만 오래 걸려요)' : ''}`);
   });
   const out = [];
   let miss = 0;
-  for (const g of gs) {
+  for (const g of near) {
+    const dc = LCDONG.get(g.code + '|' + g.umd);
+    g.p = g.masked ? dc : g.pe;
     if (!g.p) {
       miss++;
       continue;
     }
     const d = hav(S.center.lat, S.center.lon, g.p[0], g.p[1]);
-    if (d <= S.rad + 500) out.push({ g, d });
+    if (d <= (g.masked ? S.rad + 500 : S.rad)) out.push({ g, d });
   }
   return { out, miss };
 }
@@ -261,7 +284,7 @@ async function refreshLC(fit) {
   if (tok !== S.token) return;
   LC.loading = false;
   LC.list = out;
-  status(miss ? `위치를 찾지 못한 법정동 ${miss}곳은 제외했어요.` : '');
+  status(miss ? `주소로 위치를 찾지 못한 ${miss}곳은 제외했어요.` : '');
   recomputeLC();
   if (fit && circle) map.setBounds(circle.getBounds());
 }
@@ -287,9 +310,9 @@ function renderLCPins() {
       s = LC.sum.get(g.key),
       sel = LC.sel === g.key,
       el = document.createElement('div');
-    el.className = 'pin lpin ' + S.asset + (s ? '' : ' none') + (sel ? ' sel' : '');
-    el.innerHTML = (s ? `<small>${s.n}건 · 평당</small><b>${eok(s.med)}</b>` : '<small>조건 거래없음</small><b>-</b>') + `<i class="nm">${esc(g.umd)}</i>`;
-    el.title = g.umd;
+    el.className = 'pin lpin ' + S.asset + (s ? '' : ' none') + (sel ? ' sel' : '') + (g.masked ? ' approx' : '');
+    el.innerHTML = (s ? `<small>${s.n}건 · 평당</small><b>${eok(s.med)}</b>` : '<small>조건 거래없음</small><b>-</b>') + `<i class="nm">${esc(lcName(g))}</i>`;
+    el.title = lcName(g);
     el.addEventListener('click', e => {
       e.stopPropagation();
       openLC(g.key, false);
@@ -306,6 +329,7 @@ function renderLCPins() {
     LC.ov.push(ov);
   }
 }
+const lcName = g => (g.masked ? g.umd + ' (지번 비공개)' : g.umd + ' ' + g.jibun);
 const yrsTxt = () => (S.months % 12 ? S.months + '개월' : S.months / 12 + '년');
 function lcFilterTxt() {
   const k = lcKind();
@@ -315,21 +339,21 @@ function renderLCList() {
   const el = $('#list'),
     k = lcKind();
   if (!S.center) {
-    el.innerHTML = `<div class="empty">주소를 검색하거나 지도를 클릭하면<br>반경 안 법정동별 ${k.name} 거래가 여기에 나와요.</div>`;
+    el.innerHTML = `<div class="empty">주소를 검색하거나 지도를 클릭하면<br>반경 안 지번별 ${k.name} 거래가 여기에 나와요.</div>`;
     return;
   }
   const n = LC.list.length;
-  let h = `<div class="lh"><b>${esc(S.center.label || '선택한 위치')}</b> 반경 ${S.rad >= 1000 ? S.rad / 1000 + 'km' : S.rad + 'm'} · 법정동 ${n}곳<br><small>${esc(lcFilterTxt())}</small></div>`;
+  let h = `<div class="lh"><b>${esc(S.center.label || '선택한 위치')}</b> 반경 ${S.rad >= 1000 ? S.rad / 1000 + 'km' : S.rad + 'm'} · ${n}곳<br><small>${esc(lcFilterTxt())}</small></div>`;
   if (!n) h += `<div class="empty">${LC.loading ? '거래를 모으는 중이에요…' : '이 반경에서 조건에 맞는 거래가 없어요.<br>반경·기간·필터를 바꿔 보세요.'}</div>`;
   h += LC.list
     .map(it => {
       const g = it.g,
         s = LC.sum.get(g.key);
       const px = s ? `<div class="px"><b>${eok(s.med)}</b><small>평당 · ${s.n}건</small></div>` : '<div class="px"><small>조건 거래 없음</small></div>';
-      return `<div class="item${LC.sel === g.key ? ' sel' : ''}" data-lid="${esc(g.key)}"><div class="n"><div class="nm">${esc(g.umd)}</div><div class="ad">${esc(g.sgg)} · 동 중심 ${it.d < 1000 ? Math.round(it.d) + 'm' : (it.d / 1000).toFixed(2) + 'km'}</div></div>${px}</div>`;
+      return `<div class="item${LC.sel === g.key ? ' sel' : ''}" data-lid="${esc(g.key)}"><div class="n"><div class="nm">${esc(lcName(g))}</div><div class="ad">${esc(g.sgg)} · ${g.masked ? '동 중심 ' : ''}${it.d < 1000 ? Math.round(it.d) + 'm' : (it.d / 1000).toFixed(2) + 'km'}</div></div>${px}</div>`;
     })
     .join('');
-  h += `<div class="note" style="margin:10px 14px">국토부 공개 자료는 ${k.name} 지번을 일부만 공개해(예: 1**) 필지 위치 대신 법정동 단위로 모았어요. 법정동 중심이 반경+500m 안이면 포함합니다.</div>`;
+  h += `<div class="note" style="margin:10px 14px">지번이 공개된 거래는 해당 지번의 위치에, 지번이 가려진 거래(예: 1**)는 법정동 단위로 묶어 동 중심에 표시해요. 위치는 지번 주소를 지도 검색으로 변환한 값이라 실제 필지와 조금 다를 수 있어요.</div>`;
   el.innerHTML = h;
 }
 function openLC(key, pan) {
@@ -382,7 +406,7 @@ function renderLCDetail() {
   const land = S.asset === 'land',
     s = lcSum(g),
     allN = g.trades.filter(t => t.ymd >= cutoff()).length;
-  let h = `<button class="x" id="dx">닫기</button><h2>${esc(g.umd)}</h2><div class="ad">${esc(g.sgg)} · ${esc(lcKind().name)} · ${esc(lcFilterTxt())}<br>이 동의 최근 ${yrsTxt()} 전체 거래 ${allN}건 중 조건에 맞는 거래 ${s ? s.n : 0}건</div>`;
+  let h = `<button class="x" id="dx">닫기</button><h2>${esc(lcName(g))}</h2><div class="ad">${esc(g.sgg)} · ${esc(lcKind().name)} · ${esc(lcFilterTxt())}<br>${g.masked ? '지번이 가려진 거래를 동 단위로 묶은 값 · ' : ''}최근 ${yrsTxt()} 전체 거래 ${allN}건 중 조건에 맞는 거래 ${s ? s.n : 0}건</div>`;
   if (!s) h += '<div class="note">조건에 맞는 거래가 없어요. 위쪽 지목·용도·유형 필터나 기간을 바꿔 보세요.</div>';
   else {
     const u = s.arr.map(lcUnit);
@@ -426,7 +450,7 @@ function renderLCDetail() {
         .join('') +
       '</table></div>';
     h += land
-      ? '<div class="note">평당가 = 거래금액 ÷ 거래면적(평). 지분거래는 면적 대비 금액이 왜곡될 수 있어 기본으로 뺍니다. 지번은 국토부가 일부만 공개한 값 그대로예요.</div>'
+      ? '<div class="note">평당가 = 거래금액 ÷ 거래면적(평). 지분거래는 면적 대비 금액이 왜곡될 수 있어 기본으로 뺍니다. 지번이 가려진(1** 등) 거래는 정확한 필지를 알 수 없어요.</div>'
       : `<div class="note">평당가 = 거래금액 ÷ ${LC.opt.nrg === 'gen' ? '대지면적(평) — 통건물은 대지 기준으로 비교하는 게 일반적이에요' : '건물(전용)면적(평)'}. 지분거래는 뺍니다. 층은 집합건물만 공개돼요.</div>`;
   }
   el.innerHTML = h;
