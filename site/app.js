@@ -41,6 +41,86 @@ const bandOf = () => BANDS.find(b => b.k === S.band);
 async function getJSON(u) { const r = await fetch(u, { cache: 'no-cache' }); if (!r.ok) throw new Error(u + ' ' + r.status); return r.json(); }
 function status(msg, err) { const el = $('#status'); el.textContent = msg || ''; el.className = 'status' + (err ? ' err' : ''); }
 
+/* ---------- 브라우저 저장소 (IndexedDB) ---------- */
+// 건축물대장·좌표·지난달까지의 실거래를 이 브라우저에 저장해 다시 조회하지 않는다.
+// 예전에는 localStorage를 썼는데 약 5MB에서 저장이 조용히 멈춰 IndexedDB로 옮겼다(처음 열 때 자동 이전).
+// IndexedDB를 쓸 수 없는 환경이면 저장 없이 매번 조회한다.
+const DAY = 86400000;
+const IDB = (() => {
+  let dbp = null;
+  const open = () => dbp || (dbp = new Promise(res => {
+    try {
+      const rq = indexedDB.open('apt-map', 1);
+      rq.onupgradeneeded = () => { const db = rq.result; for (const st of ['bld', 'geo', 'month', 'mtime']) if (!db.objectStoreNames.contains(st)) db.createObjectStore(st); };
+      rq.onsuccess = () => res(rq.result); rq.onerror = () => res(null); rq.onblocked = () => res(null);
+    } catch (e) { res(null); }
+  }));
+  const req = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const write = async (store, fn) => {
+    const db = await open(); if (!db) return;
+    try { const tx = db.transaction(store, 'readwrite'); fn(tx.objectStore(store)); await new Promise(r => { tx.oncomplete = tx.onerror = tx.onabort = r; }); }
+    catch (e) { /* 저장 실패는 조회 결과에 영향이 없으므로 넘어간다 */ }
+  };
+  return {
+    ok: async () => !!(await open()),
+    async get(store, key) {
+      const db = await open(); if (!db) return undefined;
+      try { return await req(db.transaction(store).objectStore(store).get(key)); } catch (e) { return undefined; }
+    },
+    async entries(store) {
+      const db = await open(); if (!db) return [];
+      try { const os = db.transaction(store).objectStore(store), [ks, vs] = await Promise.all([req(os.getAllKeys()), req(os.getAll())]); return ks.map((k, i) => [k, vs[i]]); }
+      catch (e) { return []; }
+    },
+    putMany: (store, pairs) => pairs.length ? write(store, os => { for (const [k, v] of pairs) os.put(v, k); }) : Promise.resolve(),
+    delMany: (store, keys) => keys.length ? write(store, os => { for (const k of keys) os.delete(k); }) : Promise.resolve(),
+  };
+})();
+// 키-값 캐시: 화면 코드는 메모리 객체(obj)를 그대로 읽고, 값을 넣을 때만 put()을 부른다. 바뀐 값만 모아서 저장한다.
+// ttl(값) 지난 항목과 max개를 넘는 오래된 항목은 시작할 때 지운다.
+function kvCache(store, obj, ttl, max) {
+  const dirty = new Map(); let timer = 0;
+  return {
+    put(k, v) {
+      obj[k] = v; dirty.set(k, { v, t: Date.now() });
+      clearTimeout(timer); timer = setTimeout(() => { const p = [...dirty]; dirty.clear(); IDB.putMany(store, p); }, 800);
+    },
+    async load(legacyKey, keep) {
+      const now = Date.now(), drop = [];
+      const live = (await IDB.entries(store)).filter(([k, r]) => { const ok = r && now - r.t < ttl(r.v); if (!ok) drop.push(k); return ok; })
+        .sort((a, b) => b[1].t - a[1].t);
+      live.slice(max).forEach(([k]) => drop.push(k));
+      for (const [k, r] of live.slice(0, max)) obj[k] = r.v;
+      IDB.delMany(store, drop);
+      let old = null; try { old = JSON.parse(localStorage.getItem(legacyKey) || 'null'); } catch (e) { old = null; }
+      if (!old || typeof old !== 'object') return;
+      const pairs = Object.keys(old).filter(k => !(k in obj) && (!keep || keep(k))).map(k => { obj[k] = old[k]; return [k, { v: old[k], t: now }]; });
+      if (await IDB.ok()) { await IDB.putMany(store, pairs); try { localStorage.removeItem(legacyKey); } catch (e) { /* 지우지 못해도 다음에 다시 시도 */ } }
+    },
+  };
+}
+// 실거래 월별 원자료: 신고 기한(계약 후 30일)과 해제 신고 때문에 이번 달·지난달은 매번 새로 받고, 그 이전 달은 저장본을 쓴다.
+// 저장본은 2~3개월 전 자료면 7일, 그보다 오래된 자료면 30일이 지나면 다시 받는다.
+const MONTH_MAX = 4000, MONTH_VER = 'v1';   // 저장 형식을 바꾸면 MONTH_VER를 올려 예전 저장본을 쓰지 않게 한다
+function monthAge(ym) { const now = new Date(); return (now.getFullYear() - +ym.slice(0, 4)) * 12 + (now.getMonth() + 1 - +ym.slice(4, 6)); }
+async function cachedMonth(kind, f, ym, fetcher) {
+  const age = monthAge(ym), key = MONTH_VER + '|' + kind + '|' + f + '|' + ym;
+  if (age >= 2) { const hit = await IDB.get('month', key); if (hit && Date.now() - hit.t < (age <= 3 ? 7 : 30) * DAY) return hit.rows; }
+  const rows = await fetcher();
+  if (age >= 2) { const t = Date.now(); IDB.putMany('month', [[key, { t, rows }]]); IDB.putMany('mtime', [[key, t]]); }
+  return rows;
+}
+async function pruneMonths() {        // 30일 지난 월 자료와 MONTH_MAX를 넘는 오래된 자료를 지운다 (시간표 'mtime'만 읽으므로 가볍다)
+  const now = Date.now(), all = (await IDB.entries('mtime')).sort((a, b) => b[1] - a[1]);
+  const drop = all.filter(([, t], i) => i >= MONTH_MAX || now - t >= 30 * DAY).map(([k]) => k);
+  await Promise.all([IDB.delMany('month', drop), IDB.delMany('mtime', drop)]);
+}
+async function loadCaches() {         // 시작할 때 한 번: 저장본 불러오기 + 예전 localStorage 캐시 이전·정리
+  let ofix = true; try { ofix = !!localStorage.getItem('bld_ofix1'); } catch (e) { ofix = true; }
+  await Promise.all([BLDC.load('bld_v4', k => ofix || k.slice(0, 2) !== 'o|'), GEOC.load('geo_v1'), pruneMonths()]);
+  try { if (!localStorage.getItem('bld_v4')) localStorage.removeItem('bld_ofix1'); } catch (e) { /* 무시 */ }
+}
+
 /* ---------- 데이터 ---------- */
 // 실거래는 사이트를 연 브라우저가 국토교통부 API를 직접 조회한다. 인증키는 이 브라우저(localStorage)에만 저장한다.
 const API_LIST = [
@@ -85,8 +165,8 @@ async function fetchPage(idx, f, ym, page) {
   const rc = g('resultCode'); if (rc && rc !== '00' && rc !== '000') throw { kind: 'api', msg: rc + ' ' + g('resultMsg') };
   return { total: +g('totalCount') || 0, items: [...doc.getElementsByTagName('item')] };
 }
-async function fetchMonth(f, ym) {
-  let page = 1; const got = [];
+async function aptRows(f, ym) {        // 한 달치 → [읍면동, 지번, 단지명, 계약일, 전용㎡, 층, 만원, 건축년도] (해제 거래 제외)
+  let page = 1; const rows = [];
   for (;;) {
     const used = apiIdx; let res;
     try { res = await fetchPage(used, f, ym, page); }
@@ -97,11 +177,17 @@ async function fetchMonth(f, ym) {
       const amt = parseInt(v('dealAmount').replace(/,/g, ''), 10), area = Math.round(parseFloat(v('excluUseAr')) * 100) / 100;
       const ymd = (+v('dealYear')) * 10000 + (+v('dealMonth')) * 100 + (+v('dealDay'));
       if (!amt || !area || !ymd) continue;
-      const id = matchRow(f, v('umdNm'), v('jibun'), v('aptNm')); if (id == null) { UNM.push({ f, ym, umd: v('umdNm'), jibun: v('jibun'), name: v('aptNm') }); continue; }
-      const by = +v('buildYear'); if (by) BY.set(id, by);
-      got.push([id, [ymd, area, parseInt(v('floor'), 10) || 0, amt]]); }
+      rows.push([v('umdNm'), v('jibun'), v('aptNm'), ymd, area, parseInt(v('floor'), 10) || 0, amt, +v('buildYear') || 0]); }
     if (page * 1000 >= res.total || !res.items.length) break; page++;
   }
+  return rows;
+}
+async function fetchMonth(f, ym) {
+  const rows = await cachedMonth('apt', f, ym, () => aptRows(f, ym)), got = [];
+  for (const [umd, jibun, name, ymd, area, floor, amt, by] of rows) {
+    const id = matchRow(f, umd, jibun, name); if (id == null) { UNM.push({ f, ym, umd, jibun, name }); continue; }
+    if (by) BY.set(id, by);
+    got.push([id, [ymd, area, floor, amt]]); }
   for (const [id, t] of got) push(LIVE, id, t);
   DONE.add(f + '|' + ym);
 }
@@ -125,10 +211,10 @@ const tradesOf = id => LIVE.get(id) || [];
 /* ---------- 건축물대장 표제부: 세대수·사용승인연도·층수 ---------- */
 // 단지 지번으로 조회하고, 결과는 바뀌지 않는 값이라 이 브라우저에 저장해 다시 조회하지 않는다.
 const BLD_API = 'https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo';
-let BLD = {}; try { BLD = JSON.parse(localStorage.getItem('bld_v4') || '{}') || {}; if (!localStorage.getItem('bld_ofix1')) { for (const k in BLD) if (k.slice(0, 2) === 'o|') delete BLD[k]; localStorage.setItem('bld_ofix1', '1'); } } catch (e) {}   // 오피스텔 캐시는 호(실)수 산정 방식 변경으로 한 번 비움
-const BY = new Map(); let bldSaveT = 0, bldErr = null;
+const BLD = {};                    // 지번 키 -> [세대수, 준공연도, 지상층, 지하층, 동수, 출처, 공급/전용 비율] | 0(못 찾음)
+const BLDC = kvCache('bld', BLD, v => (v ? 180 : 30) * DAY, 30000);   // 찾은 값은 180일, 못 찾은 지번은 30일 뒤 다시 조회
+const BY = new Map(); let bldErr = null;
 const bkey = c => c.code + '|' + c.umd + '|' + c.jibun;
-function bldSave() { clearTimeout(bldSaveT); bldSaveT = setTimeout(() => { try { localStorage.setItem('bld_v4', JSON.stringify(BLD)); } catch (e) {} }, 800); }
 function regionCode(c) { return new Promise(res => geocoder.coord2RegionCode(c.lon, c.lat, (r, st) => {
   if (st !== kakao.maps.services.Status.OK) return res(null); const b = r.find(x => x.region_type === 'B'); res(b && b.code ? String(b.code) : null); })); }
 // --- K-apt(공동주택관리정보시스템): 단지 단위 세대수·동수·최고층·지하층. 있으면 이쪽을 우선한다. ---
@@ -216,7 +302,7 @@ async function loadBld(tok) {
   if (!todo.length) return;
   let k = 0, last = 0;
   const worker = async () => { while (k < todo.length && tok === S.token && !bldErr) { const c = todo[k++];
-    try { BLD[bkey(c)] = await fetchBld(c); bldSave(); } catch (e) { if (e.kind === 'key' || e.kind === 'net') bldErr = e; }
+    try { BLDC.put(bkey(c), await fetchBld(c)); } catch (e) { if (e.kind === 'key' || e.kind === 'net') bldErr = e; }
     if (tok === S.token && Date.now() - last > 500) { last = Date.now(); renderList(); } } };
   await Promise.all(Array.from({ length: 4 }, worker));
   if (tok !== S.token) return;
@@ -254,14 +340,15 @@ const SILV_API = 'https://apis.data.go.kr/1613000/RTMSDataSvcSilvTrade/getRTMSDa
 const OD = 'https://api.odcloud.kr/api/';
 const SIDO_OF = { '11': '서울', '41': '경기', '28': '인천' };
 const SILVC = new Map(), SILVG = new Map(), SDONE = new Set(), SALES = new Map(), SALEX = new Map();
-let GEO = {}; try { GEO = JSON.parse(localStorage.getItem('geo_v1') || '{}') || {}; } catch (e) {}
-let XOV = [], xsel = null, geoT = 0;
+const GEO = {};                    // 주소(또는 sale|주소|단지명) -> [위도, 경도(, 개략 여부)]
+const GEOC = kvCache('geo', GEO, () => 180 * DAY, 30000);
+let XOV = [], xsel = null;
 const X = { silv: [], err: [] };
 function geocodeAddr(addr) {
   if (GEO[addr]) return Promise.resolve(GEO[addr]);
   return new Promise(res => geocoder.addressSearch(addr, (r, st) => {
     const v = (st === kakao.maps.services.Status.OK && r[0]) ? [+r[0].y, +r[0].x] : null;
-    if (v) { GEO[addr] = v; clearTimeout(geoT); geoT = setTimeout(() => { try { localStorage.setItem('geo_v1', JSON.stringify(GEO)); } catch (e) {} }, 800); }
+    if (v) GEOC.put(addr, v);
     res(v); }));
 }
 async function geocodeLoose(addr) {
@@ -392,7 +479,7 @@ async function addSupplySlide(K, pd) {
 }
 async function geocodeSale(addr, name) {
   const k = 'sale|' + addr + '|' + name; if (GEO[k]) return GEO[k];
-  const done = v => { if (v) { GEO[k] = v; clearTimeout(geoT); geoT = setTimeout(() => { try { localStorage.setItem('geo_v1', JSON.stringify(GEO)); } catch (e) {} }, 800); } return v; };
+  const done = v => { if (v) GEOC.put(k, v); return v; };
   let v = await geocodeLoose(addr); if (v) return done([v[0], v[1], false]);
   const adr = String(addr || ''), nm = String(name || '').replace(/\(.*?\)/g, ' ').replace(/(신혼희망타운|공공분양주택?|공공분양|본청약|조합원 취소분|이익공유형 분양주택|잔여세대|무순위|추가\s*모집|입주자\s*모집공고).*$/, '').trim();
   const city = (adr.match(/(?:경기도|인천광역시|서울특별시)\s+(\S+시(?:\s+\S+구)?|\S+구|\S+군)/) || [])[1] || '', c1 = city.split(' ')[0];
@@ -406,8 +493,9 @@ async function geocodeSale(addr, name) {
 }
 function centerRegion() { return new Promise(res => geocoder.coord2RegionCode(S.center.lon, S.center.lat, (r, st) => {
   if (st !== kakao.maps.services.Status.OK) return res(null); const b = r.find(x => x.region_type === 'B'); res(b || null); })); }
-async function silvMonth(f, ym) {
-  let key = KEY; try { key = decodeURIComponent(KEY); } catch (e) {}
+async function silvRows(f, ym) {       // 한 달치 → [읍면동, 지번, 단지명, 시군구명, 계약일, 전용㎡, 층, 만원, 분양권/입주권] (해제 거래 제외)
+  let key = KEY; try { key = decodeURIComponent(KEY); } catch (e) { key = KEY; }
+  const rows = [];
   for (let page = 1; page <= 5; page++) {
     let r; try { r = await fetch(SILV_API + '?' + new URLSearchParams({ serviceKey: key, LAWD_CD: f, DEAL_YMD: ym, pageNo: page, numOfRows: 1000 })); } catch (e) { throw { kind: 'net' }; }
     if (r.status === 401 || r.status === 403) throw { kind: 'key', msg: 'HTTP ' + r.status };
@@ -418,14 +506,19 @@ async function silvMonth(f, ym) {
       const amt = parseInt(String(o.dealAmount || '').replace(/,/g, ''), 10), area = Math.round(parseFloat(o.excluUseAr) * 100) / 100;
       const ymd = (+o.dealYear) * 10000 + (+o.dealMonth) * 100 + (+o.dealDay);
       if (!amt || !area || !ymd) continue;
-      const t = [ymd, area, parseInt(o.floor, 10) || 0, amt, o.ownershipGbn || o.ownershipGbnNm || ''];
-      const nm = o.aptNm || o.aptName || '', id = matchRow(f, o.umdNm || '', o.jibun || '', nm);
-      if (id != null) push(SILVC, id, t);
-      else { const k = f + '|' + (o.umdNm || '') + '|' + (o.jibun || '') + '|' + nn(nm);
-        if (!SILVG.has(k)) SILVG.set(k, { key: k, code: f, umd: o.umdNm || '', jibun: o.jibun || '', name: nm, sgg: o.sggNm || '', trades: [] });
-        SILVG.get(k).trades.push(t); }
+      rows.push([o.umdNm || '', o.jibun || '', o.aptNm || o.aptName || '', o.sggNm || '', ymd, area, parseInt(o.floor, 10) || 0, amt, o.ownershipGbn || o.ownershipGbnNm || '']);
     }
     if (page * 1000 >= out.total || !out.items.length) break;
+  }
+  return rows;
+}
+async function silvMonth(f, ym) {      // 한 달치를 끝까지 받은 뒤에만 반영 (중간 실패 시 중복 방지)
+  for (const [umd, jibun, nm, sgg, ymd, area, floor, amt, own] of await cachedMonth('silv', f, ym, () => silvRows(f, ym))) {
+    const t = [ymd, area, floor, amt, own], id = matchRow(f, umd, jibun, nm);
+    if (id != null) push(SILVC, id, t);
+    else { const k = f + '|' + umd + '|' + jibun + '|' + nn(nm);
+      if (!SILVG.has(k)) SILVG.set(k, { key: k, code: f, umd, jibun, name: nm, sgg, trades: [] });
+      SILVG.get(k).trades.push(t); }
   }
   SDONE.add(f + '|' + ym);
 }
@@ -702,7 +795,7 @@ async function makeReport(detail) {
     const near = nearby(S.center.lat, S.center.lon, Math.max(MAXR, S.rad));
     if (!near.length) throw new Error('대상지 주변에 단지 목록에 등록된 아파트가 없어요.');
     const fetchInfo = async (list, label) => { let k = 0, dn = 0;
-      const w = async () => { while (k < list.length && !bldErr) { const c = list[k++]; try { BLD[bkey(c)] = await fetchBld(c); bldSave(); } catch (e) { if (e.kind === 'key' || e.kind === 'net') bldErr = e; } status(`기초자료 준비 중… ${label} ${++dn}/${list.length}`); } };
+      const w = async () => { while (k < list.length && !bldErr) { const c = list[k++]; try { BLDC.put(bkey(c), await fetchBld(c)); } catch (e) { if (e.kind === 'key' || e.kind === 'net') bldErr = e; } status(`기초자료 준비 중… ${label} ${++dn}/${list.length}`); } };
       await Promise.all([w(), w(), w()]); };
     const yearOf = c => BY.get(c.id) || (BLD[bkey(c)] && BLD[bkey(c)][1]) || 0;
     const mk = c => { const all = tradesOf(c.id), t1 = all.filter(t => t[0] >= cut1), tr = t1.length ? t1 : all.filter(t => t[0] >= cut2), b = BLD[bkey(c)];
@@ -1073,7 +1166,7 @@ async function makeOffiReport(detail) {
     let pick = found.slice().sort((a, b) => a.d - b.d); const cutN = pick.length > 30 ? pick.length - 30 : 0; pick = pick.slice(0, 30);
     { const need = pick.map(r => r.g).filter(g => BLD[obkey(g)] === undefined); let k = 0, dn = 0;
       await Promise.all(Array.from({ length: 3 }, async () => { while (k < need.length && !bldErr) { const g = need[k++];
-        try { const rc = await regionCode({ lat: g.p[0], lon: g.p[1] }); BLD[obkey(g)] = (rc && rc.length >= 10) ? await fetchLedger(g, rc, '업무') : 0; bldSave(); } catch (e) { if (e.kind === 'key' || e.kind === 'net') bldErr = e; }
+        try { const rc = await regionCode({ lat: g.p[0], lon: g.p[1] }); BLDC.put(obkey(g), (rc && rc.length >= 10) ? await fetchLedger(g, rc, '업무') : 0); } catch (e) { if (e.kind === 'key' || e.kind === 'net') bldErr = e; }
         status(`오피스텔 기초자료 준비 중… 건물 정보(호수·층수) ${++dn}/${need.length}`); } })); }
     const rows = pick.map(it => { const g = it.g, all = g.trades.filter(t => t[0] >= cut2), t1 = all.filter(t => t[0] >= cut1), b = BLD[obkey(g)];
       return { g, d: it.d, all, tr: t1.length ? t1 : all, span: t1.length ? 1 : 2, year: (b && b[1]) || g.by || 0, hh: (b && b[0]) || 0, up: (b && b[2]) || 0, dn: (b && b[3]) || 0 }; });
@@ -1388,8 +1481,8 @@ const passYear = g => !S.oyear || (yearOfG(g) > 0 && S.asOf.getFullYear() - year
 const obandOf = () => OBANDS.find(b => b.k === S.band) || OBANDS[0];
 const fl2 = a => Math.floor(a + 1e-6);          // 전용면적은 소수점 버림으로 묶는다 (59.97→59, 84.97→84)
 async function pool(arr, n, fn) { let i = 0; await Promise.all(Array.from({ length: n }, async () => { while (i < arr.length) { const x = arr[i++]; await fn(x); } })); }
-async function offiMonth(f, ym) {
-  let key = KEY; try { key = decodeURIComponent(KEY); } catch (e) {}
+async function offiRows(f, ym) {       // 한 달치 → [읍면동, 지번, 건물명, 시군구명, 건축년도, 계약일, 전용㎡, 층, 만원] (해제 거래 제외)
+  let key = KEY; try { key = decodeURIComponent(KEY); } catch (e) { key = KEY; }
   const rows = [];
   for (let page = 1; page <= 5; page++) {
     let r; try { r = await fetch(OFFI_API + '?' + new URLSearchParams({ serviceKey: key, LAWD_CD: f, DEAL_YMD: ym, pageNo: page, numOfRows: 1000 })); } catch (e) { throw { kind: 'net' }; }
@@ -1401,15 +1494,18 @@ async function offiMonth(f, ym) {
       const amt = parseInt(String(o.dealAmount || '').replace(/,/g, ''), 10), area = Math.round(parseFloat(o.excluUseAr) * 100) / 100;
       const ymd = (+o.dealYear) * 10000 + (+o.dealMonth) * 100 + (+o.dealDay);
       if (!amt || !area || !ymd) continue;
-      rows.push({ o, t: [ymd, area, parseInt(o.floor, 10) || 0, amt] });
+      rows.push([o.umdNm || '', o.jibun || '', o.offiNm || '', o.sggNm || '', +o.buildYear || 0, ymd, area, parseInt(o.floor, 10) || 0, amt]);
     }
     if (page * 1000 >= out.total || !out.items.length) break;
   }
-  for (const { o, t } of rows) {      // 한 달치를 끝까지 받은 뒤에만 반영 (중간 실패 시 중복 방지)
-    const nm = o.offiNm || '', k = f + '|' + (o.umdNm || '') + '|' + (o.jibun || '') + '|' + nn(nm);
-    let g = OFFI.get(k); if (!g) OFFI.set(k, g = { key: k, code: f, umd: o.umdNm || '', jibun: o.jibun || '', name: nm, sgg: o.sggNm || '', by: 0, trades: [], p: undefined });
-    const by = +o.buildYear; if (by) g.by = by;
-    g.trades.push(t);
+  return rows;
+}
+async function offiMonth(f, ym) {      // 한 달치를 끝까지 받은 뒤에만 반영 (중간 실패 시 중복 방지)
+  for (const [umd, jibun, nm, sgg, by, ymd, area, floor, amt] of await cachedMonth('offi', f, ym, () => offiRows(f, ym))) {
+    const k = f + '|' + umd + '|' + jibun + '|' + nn(nm);
+    let g = OFFI.get(k); if (!g) OFFI.set(k, g = { key: k, code: f, umd, jibun, name: nm, sgg, by: 0, trades: [], p: undefined });
+    if (by) g.by = by;
+    g.trades.push([ymd, area, floor, amt]);
   }
   ODONE.add(f + '|' + ym);
 }
@@ -1464,7 +1560,7 @@ async function loadOffiBld(tok) {                // 건축물대장 표제부로
   if (!todo.length) return;
   let k = 0, last = 0;
   const worker = async () => { while (k < todo.length && tok === S.token && !bldErr) { const g = todo[k++];
-    try { const rc = await regionCode({ lat: g.p[0], lon: g.p[1] }); BLD[obkey(g)] = (rc && rc.length >= 10) ? await fetchLedger(g, rc, '업무') : 0; bldSave(); }
+    try { const rc = await regionCode({ lat: g.p[0], lon: g.p[1] }); BLDC.put(obkey(g), (rc && rc.length >= 10) ? await fetchLedger(g, rc, '업무') : 0); }
     catch (e) { if (e.kind === 'key' || e.kind === 'net') bldErr = e; }
     if (tok === S.token && Date.now() - last > 500) { last = Date.now(); renderOffiList(); } } };
   await Promise.all(Array.from({ length: 4 }, worker));
@@ -1749,6 +1845,7 @@ function renderKey() {
 }
 async function init() {
   bind(); renderKey(); renderList();
+  await loadCaches();
   try { await loadComplexes(); } catch (e) { status('단지 데이터를 불러오지 못했어요: ' + e.message, true); return; }
   if (!cfg.KAKAO_JS_KEY && !cfg.SDK_URL) { status('카카오 JavaScript 키가 설정되지 않았어요. (저장소 Settings > Variables 에 KAKAO_JS_KEY 등록 후 다시 배포)', true); return; }
   try { await loadKakao(); } catch (e) { status(e.message + ' 카카오 개발자 콘솔에 이 사이트 주소가 등록돼 있는지 확인하세요.', true); return; }
