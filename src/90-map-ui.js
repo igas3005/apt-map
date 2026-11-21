@@ -38,12 +38,17 @@ function setCenter(lat, lon, label, o) {
 function renderPins() {
   S.ov.forEach(o => o.setMap(null));
   S.ov = [];
+  clearLCPins();
   if (S.asset === 'offi') {
     renderOffiPins();
     return;
   }
   OF.ov.forEach(o => o.setMap(null));
   OF.ov = [];
+  if (isLC()) {
+    renderLCPins();
+    return;
+  }
   if (!map) return;
   const lvl = map.getLevel(),
     items = S.list.slice(0, 300),
@@ -83,6 +88,10 @@ function renderList() {
   const el = $('#list');
   if (S.asset === 'offi') {
     renderOffiList();
+    return;
+  }
+  if (isLC()) {
+    renderLCList();
     return;
   }
   if (S.tab === 'sale') {

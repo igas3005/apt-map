@@ -450,7 +450,7 @@ function renderExtraPins() {
       () => openSale(salePin.id),
       25,
     );
-  if (S.asset === 'offi') return;
+  if (S.asset !== 'apt') return;
   for (const g of X.silv) {
     const b = silvBest(g.trades);
     add(

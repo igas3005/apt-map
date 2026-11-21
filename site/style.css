@@ -90,3 +90,11 @@ textarea{color:var(--ink);background:var(--bg);border:1px solid var(--line);bord
 .pin.opin.none{background:#8a94a6}.pin.opin.none::after{border-top-color:#8a94a6}
 .pin.opin.sel{background:var(--sel)}.pin.opin.sel::after{border-top-color:var(--sel)}
 .dot.odot{background:#15803d}.dot.odot.none{background:#8a94a6}.dot.odot.sel{background:var(--sel)}
+.assets button.on[data-asset=land],.mapassets button.on[data-asset=land]{background:#a16207;color:#fff}
+.assets button.on[data-asset=nrg],.mapassets button.on[data-asset=nrg]{background:#6d28d9;color:#fff}
+.pin.lpin.land{background:#a16207;z-index:5}.pin.lpin.land::after{border-top-color:#a16207}
+.pin.lpin.nrg{background:#6d28d9;z-index:5}.pin.lpin.nrg::after{border-top-color:#6d28d9}
+.pin.lpin.none{background:#8a94a6}.pin.lpin.none::after{border-top-color:#8a94a6}
+.pin.lpin.sel{background:var(--sel)}.pin.lpin.sel::after{border-top-color:var(--sel)}
+.pin.lpin .nm{transform:translate(-50%,6px)}
+.lh small{color:var(--mute);font-weight:400}
