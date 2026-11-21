@@ -1001,8 +1001,9 @@ async function makeReport(detail) {
     if (detail) {   // 분양가 포지션 (상세자료 마지막 쪽): 주변 시세·분양가·전매가로 잡은 참고 밴드
       const r10 = v => Math.round(v / 10) * 10, eok = v => (v / 10000).toFixed(1) + '억';
       const bandOf = k => { const ps = pairs1.filter(([r, t]) => bk(t) === k); if (ps.length < 3) return null;
-        const ref = med(ps.map(([r, t]) => ppy(r, t))), pyN = Math.round(med(ps.map(([r, t]) => t[1] * (r.ratio || 1.32) / PY)));
-        const inR = premOut.filter(z => z.ty === k && z.amt && z.su > 0), near = inR.filter(z => z.d <= radUsed), sp = (near.length ? near : inR).map(z => z.amt / (z.su / PY));
+        const ref = med(ps.map(([r, t]) => ppy(r, t)));
+        const inR = premOut.filter(z => z.ty === k && z.amt && z.su > 0), near = inR.filter(z => z.d <= radUsed), use = near.length ? near : inR, sp = use.map(z => z.amt / (z.su / PY));
+        const pyN = Math.round(use.length ? med(use.map(z => z.su / PY)) : med(ps.map(([r, t]) => t[1] * (r.ratio || 1.32) / PY)));   // 세대당 금액의 공급평수: 분양 사례 공급면적 우선, 없으면 비교 단지 거래 기준
         const rs = premOut.filter(z => z.ty === k && z.su > 0 && z.v.length >= 3 && z.d <= radUsed).map(z => z.m / (z.su / PY));
         return { k, n: ps.length, ref, pyN, sale: sp.length ? med(sp) : null, saleN: sp.length, resale: rs.length ? med(rs) : null, resaleN: rs.length }; };
       const B84 = bandOf(84), B59 = bandOf(59);
@@ -1010,7 +1011,7 @@ async function makeReport(detail) {
         if (B84x && B84x !== B) { const f = B84x.ref ? B.ref / B84x.ref : 0; if (mid == null && B84x.sale) { mid = B84x.sale * f; via.push('기준'); } if (hi == null && B84x.resale) { hi = B84x.resale * f; via.push('높음'); } }
         return { lo, mid, hi, via }; };
       const P84 = pick3(B84), P59 = B59 ? pick3(B59, B84) : null;
-      sl = page(P84 && P84.mid ? `84㎡ 참고 분양가 밴드: 평당 ${n(r10(P84.lo))}~${n(r10(P84.mid))}만원 (세대당 약 ${eok(r10(P84.lo) * B84.pyN)}~${eok(r10(P84.mid) * B84.pyN)}원)` : '분양가 밴드는 비교 표본이 부족해 계산하지 못했습니다', 'PRICING BAND · REFERENCE');
+      sl = page(P84 && P84.mid ? `84㎡ 참고 분양가 밴드: 평당 ${n(r10(P84.lo))}~${n(r10(P84.mid))}만원 (세대당 약 ${eok(r10(P84.lo) * B84.pyN)}~${eok(r10(P84.mid) * B84.pyN)}원)` : (P84 ? `84㎡ 입주 단지 실거래는 평당 ${n(r10(P84.lo))}만원이며, 주변 분양가 자료가 없어 밴드의 상단은 계산하지 못했습니다` : '분양가 밴드는 비교 표본이 부족해 계산하지 못했습니다'), 'PRICING BAND · REFERENCE');
       const row = (nm, v, B, note) => [cell(nm, { bold: true, color: NAVY }), cell(v ? n(r10(v)) : '-', v ? { bold: true } : {}), cell(v ? n(r10(v) * B.pyN) : '-', v ? { bold: true, fill: { color: GOLDBG } } : {}), cell(note, { align: 'left' })];
       const mk = (P, B, ttl) => [[ttl, '평당가(만원)', `세대당(만원, ${B.pyN}평)`, '기준 근거'].map(TH),
         row('낮음', P.lo, B, `반경 ${radTxt} 신축 ${B.k}㎡ 최근 1년 중위 평당가 (${B.n}건)`),
@@ -1021,7 +1022,7 @@ async function makeReport(detail) {
       if (P59) { sl.addText('59㎡ (참고)', { x: LX, y: yy, w: LW, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true }); tbl(sl, mk(P59, B59, '59㎡'), LX, yy + 0.3, LW, [1.1, 1.4, 1.9, 7.78], 10, 0.34); yy += 2.0; }
       sl.addText(['낮음은 입주한 신축 단지의 실거래 수준, 기준은 반경 안 최근 분양가 수준, 높음은 분양권 전매가 수준입니다. 높음은 전매 프리미엄을 미리 얹은 값이라 도전 구간으로 보고, 낮음~기준을 참고 밴드로 제시했습니다.',
         '대상지의 상품·브랜드·세대수·분양 시기와 층·향 차이는 반영하지 않았고, 분양가는 청약홈 최고 분양가(고층 기준)라 실제 평균보다 높을 수 있습니다. 비교 시점이 서로 다른 값(입주 단지 시세와 분양 당시 가격)이라 사업 개요가 정해지면 다시 산정이 필요합니다.',
-        '세대당 금액은 비교 단지 거래의 평균 공급평수를 반올림한 값에 평당가를 곱한 값입니다.'].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
+        '세대당 금액은 평당가에 공급평수(분양 사례의 공급면적, 없으면 비교 단지 거래 기준)를 곱한 값입니다.'].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
         { x: LX, y: Math.min(yy, 5.7), w: LW, h: 1.2, fontFace: F, fontSize: 9, color: MUTE, margin: 0, valign: 'top', paraSpaceAfter: 4, isTextBox: true, fit: 'shrink' });
     }
 
