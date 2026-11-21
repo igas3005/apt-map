@@ -113,7 +113,7 @@ async function vwParcels(code10) {
       const r = d && d.response;
       if (!r) throw { msg: '브이월드 응답을 읽지 못했어요' };
       if (r.status === 'NOT_FOUND') break;
-      if (r.status !== 'OK') throw { msg: '브이월드 오류: ' + ((r.error && (r.error.text || r.error.code)) || r.status) };
+      if (r.status !== 'OK') throw { msg: '브이월드 오류: ' + ((r.error && (r.error.text || r.error.code)) || r.status) + ` [키 ${VWKEY.length}자, 전송 도메인 ${location.hostname}]` };
       const fs = (r.result && r.result.featureCollection && r.result.featureCollection.features) || [];
       for (const f of fs) {
         const pr = f.properties || {},
