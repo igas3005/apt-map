@@ -318,6 +318,7 @@ function renderLCPins() {
       s = LC.sum.get(g.key),
       sel = LC.sel === g.key,
       el = document.createElement('div');
+    if (!s && !sel) continue; // 지금 조건(지목·용도·지분 등)에 맞는 거래가 없는 곳은 표시하지 않는다
     el.className = 'pin lpin ' + S.asset + (s ? '' : ' none') + (sel ? ' sel' : '') + (g.masked ? ' approx' : '') + (g.est ? ' est' : '');
     el.innerHTML = (s ? `<small>${s.n}건 · 평당</small><b>${eok(s.med)}</b>` : '<small>조건 거래없음</small><b>-</b>') + `<i class="nm">${esc(lcName(g))} · ${lcDist(it.d)}</i>`;
     el.title = lcName(g) + ' · 대상지에서 ' + lcDist(it.d);
@@ -351,10 +352,11 @@ function renderLCList() {
     el.innerHTML = `<div class="empty">주소를 검색하거나 지도를 클릭하면<br>반경 안 지번별 ${k.name} 거래가 여기에 나와요.</div>`;
     return;
   }
-  const n = LC.list.length;
+  const shown = LC.list.filter(it => LC.sum.get(it.g.key) || LC.sel === it.g.key),
+    n = shown.length;
   let h = `<div class="lh"><b>${esc(S.center.label || '선택한 위치')}</b> 반경 ${S.rad >= 1000 ? S.rad / 1000 + 'km' : S.rad + 'm'} · ${n}곳<br><small>${esc(lcFilterTxt())}</small></div>`;
   if (!n) h += `<div class="empty">${LC.loading ? '거래를 모으는 중이에요…' : '이 반경에서 조건에 맞는 거래가 없어요.<br>반경·기간·필터를 바꿔 보세요.'}</div>`;
-  h += LC.list
+  h += shown
     .map(it => {
       const g = it.g,
         s = LC.sum.get(g.key);
