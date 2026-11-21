@@ -201,7 +201,7 @@ function lcSum(g) {
 }
 
 // 위치: 지번이 온전한 필지는 '시도 시군구 읍면동 지번'을 좌표로 바꿔 정확한 위치에 찍는다.
-// 지번이 가려진 거래 묶음은 동 중심에 찍는다 (동 중심이 반경+500m 안이면 포함).
+// 지번이 가려진 거래 묶음은 동 중심에 찍는다 (동 중심이 반경 안일 때만 포함).
 const lcBase = g => OREGN.get(g.code) || ((OSIDO[g.code.slice(0, 2)] || '') + ' ' + g.sgg).trim();
 async function locateLC(kind, codes, tok) {
   const all = new Set();
@@ -243,7 +243,7 @@ async function locateLC(kind, codes, tok) {
       continue;
     }
     const d = hav(S.center.lat, S.center.lon, g.p[0], g.p[1]);
-    if (d <= (g.masked ? S.rad + 500 : S.rad)) out.push({ g, d });
+    if (d <= S.rad) out.push({ g, d });
   }
   return { out, miss };
 }
@@ -354,7 +354,7 @@ function renderLCList() {
       return `<div class="item${LC.sel === g.key ? ' sel' : ''}" data-lid="${esc(g.key)}"><div class="n"><div class="nm">${esc(lcName(g))}</div><div class="ad">${esc(g.sgg)} · 대상지에서 ${g.masked ? '동 중심까지 ' : ''}${lcDist(it.d)}</div></div>${px}</div>`;
     })
     .join('');
-  h += `<div class="note" style="margin:10px 14px">지번이 공개된 거래는 해당 지번의 위치에, 지번이 가려진 거래(예: 1**)는 법정동 단위로 묶어 동 중심에 표시해요. 위치는 지번 주소를 지도 검색으로 변환한 값이라 실제 필지와 조금 다를 수 있어요.</div>`;
+  h += `<div class="note" style="margin:10px 14px">지번이 공개된 거래는 해당 지번의 위치에, 지번이 가려진 거래(예: 1**)는 법정동 단위로 묶어 동 중심에 표시해요. 반경 안에 있는 곳만 보여요. 위치는 지번 주소를 지도 검색으로 변환한 값이라 실제 필지와 조금 다를 수 있어요.</div>`;
   el.innerHTML = h;
 }
 function openLC(key, pan) {
