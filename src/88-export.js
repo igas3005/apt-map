@@ -40,8 +40,8 @@ async function exportLC() {
     wb.creator = '수도권 단지 시세 지도';
     const ws = wb.addWorksheet('거래내역', { views: [{ state: 'frozen', ySplit: 1 }] });
     const cols = land
-      ? [['No', 6], ['계약일', 11], ['시군구', 11], ['읍면동', 14], ['지번', 11], ['지번 구분', 14], ['지목', 9], ['용도지역', 14], ['거래면적(㎡)', 11], ['거래면적(평)', 11], ['거래금액(만원)', 13], ['평당가(만원)', 12], ['지분거래', 8], ['대상지 거리(m)', 11], ['개별공시지가(원/㎡)', 14], ['공시지가 배율', 10]]
-      : [['No', 6], ['계약일', 11], ['시군구', 11], ['읍면동', 14], ['지번', 11], ['지번 구분', 14], ['유형', 7], ['건물주용도', 14], ['용도지역', 14], ['건물면적(㎡)', 11], ['대지면적(㎡)', 11], ['기준면적(평)', 11], ['층', 6], ['사용승인연도', 9], ['거래금액(만원)', 13], ['평당가(만원)', 12], ['대상지 거리(m)', 11], ['개별공시지가(원/㎡)', 14], ['공시지가 배율', 10]];
+      ? [['No', 6], ['계약일', 11], ['시군구', 11], ['읍면동', 14], ['지번', 11], ['지번 구분', 14], ['지목', 9], ['용도지역', 14], ['거래면적(㎡)', 11], ['거래면적(평)', 11], ['거래금액(원)', 16], ['평당가(원/평)', 15], ['지분거래', 8], ['대상지 거리(m)', 11], ['개별공시지가(원/㎡)', 14], ['공시지가 배율', 10]]
+      : [['No', 6], ['계약일', 11], ['시군구', 11], ['읍면동', 14], ['지번', 11], ['지번 구분', 14], ['유형', 7], ['건물주용도', 14], ['용도지역', 14], ['건물면적(㎡)', 11], ['대지면적(㎡)', 11], ['기준면적(평)', 11], ['층', 6], ['사용승인연도', 9], ['거래금액(원)', 16], ['평당가(원/평)', 15], ['대상지 거리(m)', 11], ['개별공시지가(원/㎡)', 14], ['공시지가 배율', 10]];
     ws.columns = cols.map(c => ({ width: c[1] }));
     xlHead(ws.addRow(cols.map(c => c[0])));
     const rows = [];
@@ -54,8 +54,8 @@ async function exportLC() {
         t = r.t,
         jg = r.g.jiga ? r.g.jiga.v : null;
       const vals = land
-        ? [i + 1, xlDate(t.ymd), r.g.sgg, r.g.umd, r.g.masked ? t.jibun : r.g.jibun, gb(r), t.kind, t.zone, t.area, { formula: `I${n}/${PY}`, result: t.area / PY }, t.amt, { formula: `K${n}/J${n}`, result: lcUnit(t) }, t.share ? '지분' : '', Math.round(r.d), jg, jg ? { formula: `K${n}*10000/I${n}/O${n}`, result: lcRatio(t, r.g) } : null]
-        : [i + 1, xlDate(t.ymd), r.g.sgg, r.g.umd, r.g.masked ? t.jibun : r.g.jibun, gb(r), t.btype.includes('일반') ? '일반' : '집합', t.kind, t.zone, t.bArea, t.pArea || null, { formula: `${LC.opt.nrg === 'gen' ? 'K' : 'J'}${n}/${PY}`, result: lcBasis(t) / PY }, t.floor || null, t.by || null, t.amt, { formula: `O${n}/L${n}`, result: lcUnit(t) }, Math.round(r.d), jg, jg && LC.opt.nrg === 'gen' ? { formula: `O${n}*10000/K${n}/R${n}`, result: lcRatio(t, r.g) } : null];
+        ? [i + 1, xlDate(t.ymd), r.g.sgg, r.g.umd, r.g.masked ? t.jibun : r.g.jibun, gb(r), t.kind, t.zone, t.area, { formula: `I${n}/${PY}`, result: t.area / PY }, t.amt * 10000, { formula: `K${n}/J${n}`, result: lcUnit(t) * 10000 }, t.share ? '지분' : '', Math.round(r.d), jg, jg ? { formula: `K${n}/I${n}/O${n}`, result: lcRatio(t, r.g) } : null]
+        : [i + 1, xlDate(t.ymd), r.g.sgg, r.g.umd, r.g.masked ? t.jibun : r.g.jibun, gb(r), t.btype.includes('일반') ? '일반' : '집합', t.kind, t.zone, t.bArea, t.pArea || null, { formula: `${LC.opt.nrg === 'gen' ? 'K' : 'J'}${n}/${PY}`, result: lcBasis(t) / PY }, t.floor || null, t.by || null, t.amt * 10000, { formula: `O${n}/L${n}`, result: lcUnit(t) * 10000 }, Math.round(r.d), jg, jg && LC.opt.nrg === 'gen' ? { formula: `O${n}/K${n}/R${n}`, result: lcRatio(t, r.g) } : null];
       const row = ws.addRow(vals);
       row.eachCell({ includeEmpty: true }, c => {
         c.font = XL_FONT;
@@ -110,10 +110,10 @@ async function exportLC() {
     const rng = c => `거래내역!${c}2:${c}${last}`;
     const stat = [
       ['거래 건수', { formula: `COUNT(${rng(pc)})` }, '필터에 맞는 거래'],
-      ['중위 평당가(만원)', { formula: `MEDIAN(${rng(pc)})` }, land ? '거래금액 ÷ 거래면적(평)' : LC.opt.nrg === 'gen' ? '거래금액 ÷ 대지면적(평)' : '거래금액 ÷ 전용면적(평)'],
-      ['평균 평당가(만원)', { formula: `AVERAGE(${rng(pc)})` }, ''],
-      ['최고 평당가(만원)', { formula: `MAX(${rng(pc)})` }, ''],
-      ['최저 평당가(만원)', { formula: `MIN(${rng(pc)})` }, ''],
+      ['중위 평당가(원/평)', { formula: `MEDIAN(${rng(pc)})` }, land ? '거래금액 ÷ 거래면적(평)' : LC.opt.nrg === 'gen' ? '거래금액 ÷ 대지면적(평)' : '거래금액 ÷ 전용면적(평)'],
+      ['평균 평당가(원/평)', { formula: `AVERAGE(${rng(pc)})` }, ''],
+      ['최고 평당가(원/평)', { formula: `MAX(${rng(pc)})` }, ''],
+      ['최저 평당가(원/평)', { formula: `MIN(${rng(pc)})` }, ''],
       ['지번 추정 거래 건수', { formula: `COUNTIF(${rng(gc)},"추정")` }, '면적 대조로 지번을 추정한 거래'],
       ['지번 비공개 거래 건수', { formula: `COUNTIF(${rng(gc)},"비공개*")` }, '동 단위로만 알 수 있는 거래'],
     ];
@@ -138,14 +138,14 @@ async function exportLC() {
     }
     // 필지별 시트
     const pj = wb.addWorksheet('필지별', { views: [{ state: 'frozen', ySplit: 1 }] });
-    pj.columns = [{ width: 14 }, { width: 14 }, { width: 14 }, { width: 8 }, { width: 14 }, { width: 12 }, { width: 14 }];
-    xlHead(pj.addRow(['읍면동', '지번', '지번 구분', '건수', '중위 평당가(만원)', '최근 거래일', '대상지 거리(m)']));
+    pj.columns = [{ width: 14 }, { width: 14 }, { width: 14 }, { width: 8 }, { width: 18 }, { width: 12 }, { width: 14 }];
+    xlHead(pj.addRow(['읍면동', '지번', '지번 구분', '건수', '중위 평당가(원/평)', '최근 거래일', '대상지 거리(m)']));
     items
       .slice()
       .sort((a, b) => a.d - b.d)
       .forEach(it => {
         const s = LC.sum.get(it.g.key),
-          row = pj.addRow([it.g.umd, it.g.masked ? '(비공개)' : it.g.jibun, it.g.masked ? '비공개(동 단위)' : it.g.est ? '추정' : '공개', s.n, Math.round(s.med), xlDate(s.latest), Math.round(it.d)]);
+          row = pj.addRow([it.g.umd, it.g.masked ? '(비공개)' : it.g.jibun, it.g.masked ? '비공개(동 단위)' : it.g.est ? '추정' : '공개', s.n, Math.round(s.med * 10000), xlDate(s.latest), Math.round(it.d)]);
         row.eachCell(c => {
           c.font = XL_FONT;
           c.border = xlBorder;
