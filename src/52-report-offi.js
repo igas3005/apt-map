@@ -306,7 +306,7 @@ async function makeOffiReport(detail) {
         margin: 0,
         isTextBox: true,
       });
-    if (detail) await addDetailSlides(Object.assign({ reg, d2, d3, sido: SIDO_OF[code5.slice(0, 2)] }, K0));
+    if (detail) await addDetailSlides(Object.assign({ reg, d2, d3, sido: OSIDO[code5.slice(0, 2)] }, K0));
     // 추이
     const ms = [];
     for (let k = 23; k >= 0; k--) {
