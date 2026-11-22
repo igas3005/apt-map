@@ -37,7 +37,7 @@ async function exportLC() {
     }
     await loadExcelLib();
     const wb = new ExcelJS.Workbook();
-    wb.creator = '수도권 단지 시세 지도';
+    wb.creator = '부동산 실거래 지도';
     const ws = wb.addWorksheet('거래내역', { views: [{ state: 'frozen', ySplit: 1 }] });
     const cols = land
       ? [['No', 6], ['계약일', 11], ['시군구', 11], ['읍면동', 14], ['지번', 11], ['지번 구분', 14], ['지목', 9], ['용도지역', 14], ['거래면적(㎡)', 11], ['거래면적(평)', 11], ['거래금액(원)', 16], ['평당가(원/평)', 15], ['지분거래', 8], ['대상지 거리(m)', 11], ['개별공시지가(원/㎡)', 14], ['공시지가 배율', 10]]
