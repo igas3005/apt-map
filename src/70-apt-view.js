@@ -19,6 +19,23 @@ async function refresh(fit) {
   S.list = nearby(S.center.lat, S.center.lon, S.rad);
   renderList();
   if (S.hasData) {
+    S.liveErr = null;
+    status('주변 시군구 확인 중…');
+    const around = await regionsAround(S.center, S.rad + 500);
+    if (tok !== S.token) return;
+    if (!around.size) {
+      status('이 위치의 시군구를 확인하지 못했어요. (수도권·광역시만 지원)', true);
+      return;
+    }
+    if (await ensureDynComplexes(around, tok)) {
+      if (tok !== S.token) return;
+      S.list = nearby(S.center.lat, S.center.lon, S.rad);
+      renderList();
+    }
+    if (S.liveErr) {
+      status(liveErrText(S.liveErr), true);
+      return;
+    }
     status('실거래 조회 중…');
     await ensureTrades(new Set(S.list.map(i => C[i.id].code)));
     if (tok !== S.token) return;

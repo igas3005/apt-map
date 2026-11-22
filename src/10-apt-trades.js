@@ -22,7 +22,9 @@ const LIVE = new Map(),
   DONE = new Set(),
   IDX1 = new Map(),
   IDX2 = new Map(),
-  UNM = []; // UNM: 단지 목록에 매칭되지 않아 버려진 실거래
+  UNM = [], // UNM: 단지 목록에 매칭되지 않아 버려진 실거래
+  STATIC = new Set(), // 정적 단지 목록(수도권)에 있는 시군구 코드
+  DYN = new Set(); // 실거래로 단지 목록을 새로 만든 시군구 코드(광역시)
 let KEY = '';
 try {
   KEY = localStorage.getItem('molit_key') || '';
@@ -45,17 +47,21 @@ async function loadComplexes() {
     return { id: i, sido: p[0], gu: p[1], umd: p[2], code: p[3], name: r[1], jibun: r[2], lat: r[3], lon: r[4] };
   });
   for (const c of C) {
-    const last = c.umd.split(' ').pop();
-    c.nn = nn(c.name);
-    const names = [...new Set([last, c.umd, c.umd.split(' ')[0]])];
-    for (const f of [c.code].concat(LEGACY[c.code] || []))
-      for (const u of names) {
-        push(IDX1, f + '|' + u + '|' + c.jibun, c.id);
-        push(IDX2, f + '|' + u + '|' + c.nn, c.id);
-      }
+    STATIC.add(c.code);
+    addIndex(c);
   }
   S.asOf = new Date();
   S.hasData = !!KEY;
+}
+function addIndex(c) {
+  const last = c.umd.split(' ').pop();
+  c.nn = nn(c.name);
+  const names = [...new Set([last, c.umd, c.umd.split(' ')[0]])];
+  for (const f of [c.code].concat(LEGACY[c.code] || []))
+    for (const u of names) {
+      push(IDX1, f + '|' + u + '|' + c.jibun, c.id);
+      push(IDX2, f + '|' + u + '|' + c.nn, c.id);
+    }
 }
 function matchRow(f, umd, jibun, name) {
   const n = nn(name),

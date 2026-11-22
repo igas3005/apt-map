@@ -126,7 +126,7 @@ async function makeReport(detail) {
     const saleR = Math.max(radUsed, 3000),
       saleRTxt = saleR / 1000 + 'km';
     try {
-      const sido = SIDO_OF[code5.slice(0, 2)],
+      const sido = OSIDO[code5.slice(0, 2)],
         from = String(cut2).replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'),
         city = d2.split(' ')[0];
       const rowsS = (await salesOf(sido)).filter(r0 => String(r0.RCRIT_PBLANC_DE || '') >= from && String(r0.HSSPLY_ADRES || '').includes(city));
@@ -387,7 +387,7 @@ async function makeReport(detail) {
         isTextBox: true,
       });
 
-    if (detail) await addDetailSlides(Object.assign({ reg, d2, d3, sido: SIDO_OF[code5.slice(0, 2)] }, K0));
+    if (detail) await addDetailSlides(Object.assign({ reg, d2, d3, sido: OSIDO[code5.slice(0, 2)] }, K0));
     // 추이
     const ms = [];
     for (let k = 23; k >= 0; k--) {
@@ -708,7 +708,7 @@ async function makeReport(detail) {
           const tr = g.trades.filter(t => t[0] >= cut2);
           if (!tr.length) return;
           const p = await geocodeAddr(
-            `${SIDO_OF[g.code.slice(0, 2)] || ''} ${gus.get(g.code) || g.sgg || ''} ${g.umd} ${g.jibun}`.replace(/\s+/g, ' ').trim(),
+            `${OSIDO[g.code.slice(0, 2)] || ''} ${gus.get(g.code) || g.sgg || ''} ${g.umd} ${g.jibun}`.replace(/\s+/g, ' ').trim(),
           );
           if (!p) return;
           const dd = hav(S.center.lat, S.center.lon, p[0], p[1]);
