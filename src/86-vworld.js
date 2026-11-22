@@ -118,7 +118,7 @@ const vwCenter = geom => {
 // 한 법정동의 필지 전부: [지번, 지목글자, 면적㎡, 위도, 경도]
 async function vwParcels(code10) {
   if (VWPARC.has(code10)) return VWPARC.get(code10);
-  const rows = await cachedMonth('vw', code10, '200001', async () => {
+  const rows = await cachedMonth('vw2', code10, '200001', async () => {
     const out = [];
     for (let page = 1; page <= 30; page++) {
       const d = await vwCall({
@@ -141,7 +141,7 @@ async function vwParcels(code10) {
           jm = String(pr.jibun || '').trim().slice(-1),
           c = vwCenter(g),
           ar = vwArea(g);
-        if (c && ar > 0) out.push([jb, jm, Math.round(ar * 10) / 10, +c[0].toFixed(6), +c[1].toFixed(6)]);
+        if (c && ar > 0) out.push([jb, jm, Math.round(ar * 10) / 10, +c[0].toFixed(6), +c[1].toFixed(6), +pr.jiga || 0, +pr.gosi_year || 0]);
       }
       const tot = +((r.page && r.page.total) || 1);
       if (page >= tot) return out;
@@ -172,6 +172,30 @@ function vwMaskRe(m) {
   if (!s || !/\*/.test(s)) return null;
   const e = s.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '\\d');
   return new RegExp('^산?' + e + (s.includes('-') ? '' : '(-\\d+)?') + '$');
+}
+// 반경 안 필지에 개별공시지가(원/㎡)를 붙인다: 토지는 모든 필지, 상가는 통건물로 추정한 필지만
+async function vwEnrich(kind, groups, tok) {
+  if (!VWKEY) return;
+  const by = new Map();
+  for (const g of groups) {
+    if (g.masked || g.jiga !== undefined || (kind === 'nrg' && !g.est)) continue;
+    const k = g.code + '|' + g.umd;
+    (by.get(k) || by.set(k, []).get(k)).push(g);
+  }
+  await pool([...by.values()], 2, async list => {
+    if (tok !== S.token || VWERR.msg) return;
+    try {
+      const code = await vwDongCode(list[0]);
+      if (!code) return;
+      const ix = new Map((await vwParcels(code)).map(r => [r[0], r]));
+      for (const g of list) {
+        const r = ix.get(g.jibun);
+        g.jiga = r && r[5] > 0 ? { v: r[5], y: r[6] } : null;
+      }
+    } catch (e) {
+      VWERR.msg = e.msg || '브이월드 조회 실패';
+    }
+  });
 }
 // near: 반경 근처 필지 묶음들. 가려진 묶음의 거래를 필지로 옮기고 새 필지 묶음을 near에 더한다.
 async function vwEstimate(kind, near, tok) {

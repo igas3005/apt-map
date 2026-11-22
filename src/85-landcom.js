@@ -49,7 +49,8 @@ const LCD = { land: new Map(), nrg: new Map() }, // 필지 키(시군구코드|�
   LCDONG = new Map(), // 법정동 중심 좌표 캐시 (시군구코드|읍면동)
   LCDONE = new Set(),
   LCPEND = new Map();
-const LC = { list: [], sum: new Map(), sel: null, ov: [], loading: false, opt: { land: 'excl', nrg: 'col' } };
+const LC = { list: [], sum: new Map(), sel: null, ov: [], loading: false, opt: { land: 'excl', nrg: 'col' }, zone: '' };
+const LC_ZONES = [['', '전체 용도지역'], ['주거', '주거지역'], ['상업', '상업지역'], ['공업', '공업지역'], ['녹지', '녹지지역'], ['관리', '관리지역'], ['농림', '농림지역'], ['자연환경', '자연환경보전지역']];
 const lcKind = () => LC_KIND[S.asset];
 const lcBand = () => lcKind().bands.find(b => b.k === S.band) || lcKind().bands[0];
 const pick = (o, ...ks) => {
@@ -189,9 +190,16 @@ const lcUnit = t => {
 };
 function lcPass(t, cut) {
   if (t.ymd < cut || !lcBand().m(t.kind)) return false;
+  if (LC.zone && !String(t.zone || '').includes(LC.zone)) return false;
   if (S.asset === 'land') return LC.opt.land === 'incl' || !t.share;
   if (t.share) return false; // 상가 지분거래는 단가를 왜곡해 항상 제외
   return LC.opt.nrg === 'gen' ? t.btype.includes('일반') : !t.btype.includes('일반');
+}
+// 거래 단가(원/㎡) ÷ 개별공시지가 — 토지는 거래면적, 상가 통건물은 대지면적 기준(건물가 포함)
+function lcRatio(t, g) {
+  if (!g || !g.jiga) return null;
+  const a = S.asset === 'land' ? t.area : t.pArea;
+  return a > 0 ? (t.amt * 10000) / a / g.jiga.v : null;
 }
 function lcSum(g) {
   const arr = g.trades.filter(t => lcPass(t, cutoff()) && lcUnit(t) != null);
@@ -247,6 +255,7 @@ async function locateLC(kind, codes, tok) {
     const d = hav(S.center.lat, S.center.lon, g.p[0], g.p[1]);
     if (d <= S.rad) out.push({ g, d });
   }
+  await vwEnrich(kind, out.map(o => o.g), tok); // 개별공시지가 (브이월드 키가 있을 때)
   return { out, miss };
 }
 async function refreshLC(fit) {
@@ -344,7 +353,8 @@ const lcName = g => (g.masked ? g.umd + ' (지번 비공개)' : g.umd + ' ' + g.
 const yrsTxt = () => (S.months % 12 ? S.months + '개월' : S.months / 12 + '년');
 function lcFilterTxt() {
   const k = lcKind();
-  return `${lcBand().t} · ${(k.opts.find(o => o.k === LC.opt[S.asset]) || k.opts[0]).t} · 최근 ${yrsTxt()}`;
+  const z = LC.zone ? ' · ' + LC_ZONES.find(x => x[0] === LC.zone)[1] : '';
+  return `${lcBand().t}${z} · ${(k.opts.find(o => o.k === LC.opt[S.asset]) || k.opts[0]).t} · 최근 ${yrsTxt()}`;
 }
 function renderLCList() {
   const el = $('#list'),
@@ -355,7 +365,7 @@ function renderLCList() {
   }
   const shown = LC.list.filter(it => LC.sum.get(it.g.key) || LC.sel === it.g.key),
     n = shown.length;
-  let h = `<div class="lh"><b>${esc(S.center.label || '선택한 위치')}</b> 반경 ${S.rad >= 1000 ? S.rad / 1000 + 'km' : S.rad + 'm'} · ${n}곳<br><small>${esc(lcFilterTxt())}</small></div>`;
+  let h = `<div class="lh"><b>${esc(S.center.label || '선택한 위치')}</b> 반경 ${S.rad >= 1000 ? S.rad / 1000 + 'km' : S.rad + 'm'} · ${n}곳<br><small>${esc(lcFilterTxt())}</small>${n ? '<button id="lcxl" class="pri" style="float:right;margin-top:-30px;padding:5px 10px;font-size:12px">엑셀 내려받기</button>' : ''}</div>`;
   if (!n) h += `<div class="empty">${LC.loading ? '거래를 모으는 중이에요…' : '이 반경에서 조건에 맞는 거래가 없어요.<br>반경·기간·필터를 바꿔 보세요.'}</div>`;
   h += shown
     .map(it => {
@@ -367,6 +377,7 @@ function renderLCList() {
     .join('');
   h += `<div class="note" style="margin:10px 14px">지번이 공개된 거래는 해당 지번의 위치에, 지번이 가려진 거래(예: 1**)는 법정동 단위로 묶어 동 중심에 표시해요. 토지는 브이월드 키가 있으면, 상가 통건물은 건축물대장과 면적을 대조해 가려진 지번을 (추정)으로 찍어요. 반경 안에 있는 곳만 보여요. 위치는 지번 주소를 지도 검색으로 변환한 값이라 실제 필지와 조금 다를 수 있어요.</div>`;
   el.innerHTML = h;
+  if ($('#lcxl')) $('#lcxl').onclick = exportLC;
 }
 function openLC(key, pan) {
   const g = LCD[S.asset].get(key);
@@ -430,6 +441,10 @@ function renderLCDetail() {
       if (y < y1 - Math.ceil(S.months / 12) + 1 && !v.length) continue;
       years.push({ lab: "'" + String(y).slice(2), v: v.length ? med(v.map(lcUnit)) : null, n: v.length });
     }
+    if (g.jiga) {
+      const rs = s.arr.map(t => lcRatio(t, g)).filter(x => x != null);
+      h += `<div class="note" style="margin:8px 0">개별공시지가(${g.jiga.y || '-'}년) <b>${g.jiga.v.toLocaleString('ko-KR')}원/㎡</b> (평당 ${Math.round((g.jiga.v * PY) / 1e4).toLocaleString('ko-KR')}만원)${rs.length ? ` · 거래 단가 ÷ 공시지가 중위 <b>${med(rs).toFixed(1)}배</b>${land ? '' : ' (건물가 포함)'}` : ''}</div>`;
+    }
     const ch = barSvg(years);
     if (ch) h += `<div class="sec">연도별 중위 평당가 (만원)</div>${ch}`;
     // 지목·용도별 요약
@@ -446,7 +461,7 @@ function renderLCDetail() {
         .join('') +
       '</table>';
     const head = land
-      ? '<tr><th>계약일</th><th>지번</th><th>지목</th><th>용도지역</th><th>면적</th><th>거래가</th><th>평당</th></tr>'
+      ? '<tr><th>계약일</th><th>지번</th><th>지목</th><th>용도지역</th><th>면적</th><th>거래가</th><th>평당</th>' + (g.jiga ? '<th>공시배율</th>' : '') + '</tr>'
       : '<tr><th>계약일</th><th>지번</th><th>용도</th><th>건물/대지</th><th>층</th><th>거래가</th><th>평당</th></tr>';
     h +=
       `<div class="sec">최근 거래 (${Math.min(30, s.arr.length)}/${s.arr.length}건)</div><div style="overflow:auto"><table>${head}` +
@@ -456,7 +471,7 @@ function renderLCDetail() {
         .slice(0, 30)
         .map(t =>
           land
-            ? `<tr><td>${ds(t.ymd)}</td><td>${esc(t.jibun)}${t.est ? '<br><small>추정</small>' : t.cand ? `<br><small title="${esc(t.candTxt)}">후보 ${t.cand}필지</small>` : ''}</td><td>${esc(t.kind)}</td><td>${esc(t.zone)}</td><td>${Math.round(t.area).toLocaleString('ko-KR')}㎡<br><small>${(t.area / PY).toFixed(0)}평${t.share ? ' · 지분' : ''}</small></td><td><b>${eokFull(t.amt)}</b></td><td>${Math.round(lcUnit(t)).toLocaleString('ko-KR')}만</td></tr>`
+            ? `<tr><td>${ds(t.ymd)}</td><td>${esc(t.jibun)}${t.est ? '<br><small>추정</small>' : t.cand ? `<br><small title="${esc(t.candTxt)}">후보 ${t.cand}필지</small>` : ''}</td><td>${esc(t.kind)}</td><td>${esc(t.zone)}</td><td>${Math.round(t.area).toLocaleString('ko-KR')}㎡<br><small>${(t.area / PY).toFixed(0)}평${t.share ? ' · 지분' : ''}</small></td><td><b>${eokFull(t.amt)}</b></td><td>${Math.round(lcUnit(t)).toLocaleString('ko-KR')}만</td>${g.jiga ? `<td>${(lcRatio(t, g) || 0).toFixed(1)}배</td>` : ''}</tr>`
             : `<tr><td>${ds(t.ymd)}</td><td>${esc(t.jibun)}${t.est ? '<br><small>추정</small>' : t.cand ? `<br><small title="${esc(t.candTxt)}">후보 ${t.cand}필지</small>` : ''}</td><td>${esc(t.kind)}<br><small>${esc(t.zone)}${t.by ? ' · ' + t.by + '년' : ''}</small></td><td>${Math.round(t.bArea).toLocaleString('ko-KR')} / ${t.pArea ? Math.round(t.pArea).toLocaleString('ko-KR') : '-'}㎡</td><td>${t.floor || '-'}</td><td><b>${eokFull(t.amt)}</b></td><td>${Math.round(lcUnit(t)).toLocaleString('ko-KR')}만</td></tr>`,
         )
         .join('') +
@@ -493,6 +508,19 @@ function setupLCControls(a) {
       recomputeLC();
     };
   }
+  let z = document.getElementById('lzlab');
+  if (!z) {
+    z = document.createElement('label');
+    z.id = 'lzlab';
+    z.style.gridColumn = '1/-1';
+    z.innerHTML = '용도지역<select id="lczone">' + LC_ZONES.map(x => `<option value="${x[0]}">${x[1]}</option>`).join('') + '</select>';
+    o.after(z);
+    $('#lczone').onchange = () => {
+      LC.zone = $('#lczone').value;
+      recomputeLC();
+    };
+  }
+  z.style.display = lc ? '' : 'none';
   o.style.display = lc ? '' : 'none';
   if (lc) {
     $('#lcopt').innerHTML = k.opts.map(x => `<option value="${x.k}">${x.t}</option>`).join('');
