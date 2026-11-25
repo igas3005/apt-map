@@ -61,65 +61,37 @@ const num = v => parseFloat(String(v || '').replace(/,/g, '')) || 0;
 
 // 한 달치 원자료. 토지: [읍면동, 지번, 지목, 용도지역, 계약일, 면적㎡, 만원, 지분여부, 시군구명]
 //               상가: [읍면동, 지번, 일반/집합, 건물주용도, 용도지역, 계약일, 건물면적㎡, 대지면적㎡, 층, 만원, 지분여부, 건축년도, 시군구명]
-async function lcRows(kind, f, ym) {
-  let key = KEY;
-  try {
-    key = decodeURIComponent(KEY);
-  } catch (e) {
-    key = KEY;
+// 응답 항목 이름이 API 판마다 조금씩 달라 pick()으로 여러 이름을 받아 준다.
+function lcRow(kind, o) {
+  const amt = num(o.dealAmount),
+    ymd = dealYmd(o),
+    share = /지분/.test(pick(o, 'shareDealingType', 'shrDealingType', 'dealingType')) ? 1 : 0;
+  if (!amt || !ymd) return null;
+  if (kind === 'land') {
+    const area = num(pick(o, 'dealArea', 'area', 'lndpclAr'));
+    if (!area) return null;
+    return [pick(o, 'umdNm'), pick(o, 'jibun'), pick(o, 'jimok', 'lndcgr'), pick(o, 'landUse', 'prposArea'), ymd, area, amt, share, pick(o, 'sggNm')];
   }
-  const rows = [],
-    land = kind === 'land';
-  for (let page = 1; page <= 10; page++) {
-    let r;
-    try {
-      r = await fetch(LC_KIND[kind].api + '?' + new URLSearchParams({ serviceKey: key, LAWD_CD: f, DEAL_YMD: ym, pageNo: page, numOfRows: 1000 }));
-    } catch (e) {
-      throw { kind: 'net' };
-    }
-    if (r.status === 401 || r.status === 403) throw { kind: 'key', msg: 'HTTP ' + r.status };
-    if (!r.ok) throw { kind: 'api', msg: 'HTTP ' + r.status };
-    const out = parseAny(await r.text());
-    let used = 0;
-    for (const o of out.items) {
-      if (pick(o, 'cdealType').toUpperCase() === 'O' || pick(o, 'cdealDay')) continue;
-      const amt = num(o.dealAmount),
-        ymd = +o.dealYear * 10000 + +o.dealMonth * 100 + +o.dealDay,
-        share = /지분/.test(pick(o, 'shareDealingType', 'shrDealingType', 'dealingType')) ? 1 : 0;
-      if (!amt || !ymd) continue;
-      if (land) {
-        const area = num(pick(o, 'dealArea', 'area', 'lndpclAr'));
-        if (!area) continue;
-        rows.push([pick(o, 'umdNm'), pick(o, 'jibun'), pick(o, 'jimok', 'lndcgr'), pick(o, 'landUse', 'prposArea'), ymd, area, amt, share, pick(o, 'sggNm')]);
-      } else {
-        const bAr = num(pick(o, 'buildingAr', 'bldgArea')),
-          pAr = num(pick(o, 'plottageAr', 'plottageArea'));
-        if (!bAr && !pAr) continue;
-        rows.push([
-          pick(o, 'umdNm'),
-          pick(o, 'jibun'),
-          pick(o, 'buildingType'),
-          pick(o, 'buildingUse'),
-          pick(o, 'landUse'),
-          ymd,
-          bAr,
-          pAr,
-          parseInt(pick(o, 'floor'), 10) || 0,
-          amt,
-          share,
-          +pick(o, 'buildYear') || 0,
-          pick(o, 'sggNm'),
-        ]);
-      }
-      used++;
-    }
-    // 거래는 있는데 하나도 읽지 못했다면 응답 항목 이름이 예상과 다른 것 — 항목 이름을 그대로 보여 줘서 고칠 수 있게 한다
-    if (out.items.length && !used && !out.items.some(o => pick(o, 'cdealType').toUpperCase() === 'O' || pick(o, 'cdealDay')))
-      throw { kind: 'api', msg: '응답 항목 이름이 예상과 달라요: ' + Object.keys(out.items[0]).join(', ') };
-    if (page * 1000 >= out.total || !out.items.length) break;
-  }
-  return rows;
+  const bAr = num(pick(o, 'buildingAr', 'bldgArea')),
+    pAr = num(pick(o, 'plottageAr', 'plottageArea'));
+  if (!bAr && !pAr) return null;
+  return [
+    pick(o, 'umdNm'),
+    pick(o, 'jibun'),
+    pick(o, 'buildingType'),
+    pick(o, 'buildingUse'),
+    pick(o, 'landUse'),
+    ymd,
+    bAr,
+    pAr,
+    parseInt(pick(o, 'floor'), 10) || 0,
+    amt,
+    share,
+    +pick(o, 'buildYear') || 0,
+    pick(o, 'sggNm'),
+  ];
 }
+const lcRows = (kind, f, ym) => rtMonth(LC_KIND[kind].api, f, ym, o => lcRow(kind, o));
 async function lcMonth(kind, f, ym) {
   const m = LCD[kind];
   for (const r of await cachedMonth(kind, f, ym, () => lcRows(kind, f, ym))) {
@@ -135,40 +107,17 @@ async function lcMonth(kind, f, ym) {
     if (!g) m.set(k, (g = { key: k, code: f, umd, sgg, jibun: masked ? '' : t.jibun, masked, trades: [], pe: undefined, p: undefined }));
     g.trades.push(t);
   }
-  LCDONE.add(kind + '|' + f + '|' + ym);
 }
-const lcOnce = (kind, f, ym) => {
-  const k = kind + '|' + f + '|' + ym;
-  if (LCDONE.has(k)) return Promise.resolve();
-  if (!LCPEND.has(k)) LCPEND.set(k, lcMonth(kind, f, ym).finally(() => LCPEND.delete(k)));
-  return LCPEND.get(k);
-};
-async function ensureLC(kind, codes, months) {
-  const jobs = [],
-    seen = new Set();
-  for (const c of codes)
-    for (const f of [c].concat(LEGACY[c] || []))
-      for (const ym of monthList(months)) {
-        const k = kind + '|' + f + '|' + ym;
-        if (!LCDONE.has(k) && !seen.has(k)) {
-          seen.add(k);
-          jobs.push([f, ym]);
-        }
-      }
-  let err = null,
-    done = 0;
-  await pool(jobs, 3, async j => {
-    if (err) return;
-    try {
-      await lcOnce(kind, j[0], j[1]);
-    } catch (e) {
-      err = e;
-    }
-    done++;
-    if (!err) status(`${LC_KIND[kind].name} 실거래 조회 중… ${done}/${jobs.length}${jobs.length > 60 ? ' (처음 한 번만 오래 걸려요)' : ''}`);
+const ensureLC = (kind, codes, months) =>
+  ensureMonths({
+    codes,
+    months,
+    done: LCDONE,
+    pend: LCPEND,
+    prefix: kind + '|',
+    run: (f, ym) => lcMonth(kind, f, ym),
+    progress: (n, tot) => status(`${LC_KIND[kind].name} 실거래 조회 중… ${n}/${tot}${tot > 60 ? ' (처음 한 번만 오래 걸려요)' : ''}`),
   });
-  return err;
-}
 function lcErrText(e) {
   const k = lcKind();
   if (e.kind === 'net')

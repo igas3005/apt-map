@@ -19,7 +19,8 @@ const LEGACY = {
   28290: ['28260'],
 };
 const LIVE = new Map(),
-  DONE = new Set(),
+  DONE = new Set(), // 다 받은 달 (시군구코드|연월)
+  DPEND = new Map(), // 받는 중인 달
   IDX1 = new Map(),
   IDX2 = new Map(),
   UNM = [], // UNM: 단지 목록에 매칭되지 않아 버려진 실거래
@@ -85,39 +86,22 @@ function monthList(n) {
   }
   return out;
 }
-async function fetchPage(idx, f, ym, page) {
-  let key = KEY;
-  try {
-    key = decodeURIComponent(KEY);
-  } catch (e) {}
-  const u = API_LIST[idx] + '?' + new URLSearchParams({ serviceKey: key, LAWD_CD: f, DEAL_YMD: ym, pageNo: page, numOfRows: 1000 });
-  let r;
-  try {
-    r = await fetch(u);
-  } catch (e) {
-    throw { kind: 'net' };
-  }
-  if (r.status === 401 || r.status === 403) throw { kind: 'key', msg: 'HTTP ' + r.status };
-  if (!r.ok) throw { kind: 'api', msg: 'HTTP ' + r.status };
-  const doc = new DOMParser().parseFromString(await r.text(), 'text/xml');
-  const g = t => {
-    const e = doc.getElementsByTagName(t)[0];
-    return e ? e.textContent.trim() : '';
-  };
-  if (doc.documentElement.nodeName.indexOf('OpenAPI') === 0 || g('returnAuthMsg')) throw { kind: 'key', msg: g('returnAuthMsg') || g('errMsg') };
-  const rc = g('resultCode');
-  if (rc && rc !== '00' && rc !== '000') throw { kind: 'api', msg: rc + ' ' + g('resultMsg') };
-  return { total: +g('totalCount') || 0, items: [...doc.getElementsByTagName('item')] };
-}
+// 아파트 한 달치 → [읍면동, 지번, 단지명, 계약일, 전용㎡, 층, 만원, 건축년도] (해제 거래 제외)
+// 공공데이터포털 키에 따라 상세(Dev) API만 승인된 경우와 일반 API만 승인된 경우가 있어, 첫 성공 전까지는 인증 오류면 다른 쪽으로 바꿔 본다.
+const aptRow = o => {
+  const amt = dealAmt(o),
+    area = dealArea(o),
+    ymd = dealYmd(o);
+  if (!amt || !area || !ymd) return null;
+  return [String(o.umdNm || ''), String(o.jibun || ''), String(o.aptNm || ''), ymd, area, parseInt(o.floor, 10) || 0, amt, +o.buildYear || 0];
+};
 async function aptRows(f, ym) {
-  // 한 달치 → [읍면동, 지번, 단지명, 계약일, 전용㎡, 층, 만원, 건축년도] (해제 거래 제외)
-  let page = 1;
-  const rows = [];
   for (;;) {
     const used = apiIdx;
-    let res;
     try {
-      res = await fetchPage(used, f, ym, page);
+      const rows = await rtMonth(API_LIST[used], f, ym, aptRow);
+      apiLocked = true;
+      return rows;
     } catch (e) {
       if (e.kind === 'key' && !apiLocked) {
         if (used === apiIdx && apiIdx + 1 < API_LIST.length) {
@@ -128,25 +112,10 @@ async function aptRows(f, ym) {
       }
       throw e;
     }
-    apiLocked = true;
-    for (const it of res.items) {
-      const v = t => {
-        const e = it.getElementsByTagName(t)[0];
-        return e ? e.textContent.trim() : '';
-      };
-      if (v('cdealType').toUpperCase() === 'O' || v('cdealDay')) continue;
-      const amt = parseInt(v('dealAmount').replace(/,/g, ''), 10),
-        area = Math.round(parseFloat(v('excluUseAr')) * 100) / 100;
-      const ymd = +v('dealYear') * 10000 + +v('dealMonth') * 100 + +v('dealDay');
-      if (!amt || !area || !ymd) continue;
-      rows.push([v('umdNm'), v('jibun'), v('aptNm'), ymd, area, parseInt(v('floor'), 10) || 0, amt, +v('buildYear') || 0]);
-    }
-    if (page * 1000 >= res.total || !res.items.length) break;
-    page++;
   }
-  return rows;
 }
 async function fetchMonth(f, ym) {
+  // 한 달치를 끝까지 받은 뒤에만 반영 (중간 실패 시 중복 방지). 다 받았다는 표시는 ensureMonths가 한다.
   const rows = await cachedMonth('apt', f, ym, () => aptRows(f, ym)),
     got = [];
   for (const [umd, jibun, name, ymd, area, floor, amt, by] of rows) {
@@ -159,39 +128,19 @@ async function fetchMonth(f, ym) {
     got.push([id, [ymd, area, floor, amt]]);
   }
   for (const [id, t] of got) push(LIVE, id, t);
-  DONE.add(f + '|' + ym);
 }
 async function ensureTrades(codes, months) {
   S.liveErr = null;
   if (!KEY) return;
-  const seen = new Set(),
-    jobs = [],
-    ms = monthList(months || S.months);
-  for (const c of codes)
-    for (const f of [c].concat(LEGACY[c] || []))
-      for (const ym of ms) {
-        const k = f + '|' + ym;
-        if (!DONE.has(k) && !seen.has(k)) {
-          seen.add(k);
-          jobs.push([f, ym]);
-        }
-      }
-  let k = 0,
-    done = 0;
-  const tot = jobs.length;
-  const worker = async () => {
-    while (k < jobs.length && !S.liveErr) {
-      const j = jobs[k++];
-      try {
-        await fetchMonth(j[0], j[1]);
-      } catch (e) {
-        S.liveErr = e;
-      }
-      done++;
-      if (!S.liveErr) status(`실거래 조회 중… ${done}/${tot}`);
-    }
-  };
-  await Promise.all(Array.from({ length: 3 }, worker));
+  const err = await ensureMonths({
+    codes,
+    months: months || S.months,
+    done: DONE,
+    pend: DPEND,
+    run: fetchMonth,
+    progress: (n, tot) => status(`실거래 조회 중… ${n}/${tot}`),
+  });
+  if (err) S.liveErr = err;
 }
 function liveErrText(e) {
   if (e.kind === 'net')

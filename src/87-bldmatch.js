@@ -4,24 +4,15 @@
 const BR_PAGES = 60; // 한 동 최대 6,000건 — 넘으면 그 동은 건너뜀
 async function brRows(code10) {
   return cachedMonth('brt', code10, '200001', async () => {
-    let key = KEY;
-    try {
-      key = decodeURIComponent(KEY);
-    } catch (e) {}
     const out = [];
     for (let page = 1; page <= BR_PAGES; page++) {
-      let r;
-      try {
-        r = await fetch(BLD_API + '?' + new URLSearchParams({ serviceKey: key, sigunguCd: code10.slice(0, 5), bjdongCd: code10.slice(5), numOfRows: 100, pageNo: page, _type: 'json' }));
-      } catch (e) {
-        throw { msg: '건축물대장 조회에 접속하지 못했어요' };
-      }
-      if (r.status === 401 || r.status === 403) throw { msg: '건축물대장 조회 권한 오류 (HTTP ' + r.status + ')' };
-      if (!r.ok) throw { msg: '건축물대장 조회 오류 (HTTP ' + r.status + ')' };
       let d;
       try {
-        d = parseAny(await r.text());
+        d = await apiPage(BLD_API, { sigunguCd: code10.slice(0, 5), bjdongCd: code10.slice(5), numOfRows: 100, pageNo: page, _type: 'json' });
       } catch (e) {
+        if (e.kind === 'net') throw { msg: '건축물대장 조회에 접속하지 못했어요' };
+        if (e.kind === 'key' && /^HTTP/.test(e.msg || '')) throw { msg: '건축물대장 조회 권한 오류 (' + e.msg + ')' };
+        if (/^HTTP/.test(e.msg || '')) throw { msg: '건축물대장 조회 오류 (' + e.msg + ')' };
         throw { msg: '건축물대장 조회 오류: ' + (e.msg || '응답을 읽지 못했어요') };
       }
       for (const o of d.items) {
