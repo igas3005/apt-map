@@ -2,10 +2,7 @@
 // 인구·세대: 행정안전부 법정동별 주민등록 인구 및 세대현황 (월 기준, 2022.10부터)
 const POP_API = 'https://apis.data.go.kr/1741000/stdgPpltnHhStus/selectStdgPpltnHhStus';
 async function popFetch(code, ym, lv, api) {
-  let key = KEY;
-  try {
-    key = decodeURIComponent(KEY);
-  } catch (e) {}
+  const key = apiKey();
   let r;
   try {
     r = await fetch(

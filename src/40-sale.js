@@ -62,10 +62,7 @@ async function ensureSilv(codes, months) {
   if (err) X.err.push('분양권 실거래: ' + (err.kind === 'net' ? '접속 실패' : err.kind + ' ' + (err.msg || '')));
 }
 async function odGet(path, cond) {
-  let key = KEY;
-  try {
-    key = decodeURIComponent(KEY);
-  } catch (e) {}
+  const key = apiKey();
   const q = new URLSearchParams({ page: 1, perPage: 1000, serviceKey: key });
   for (const k in cond) q.set(`cond[${k}]`, cond[k]);
   let r;
@@ -83,10 +80,7 @@ const ST = { meta: '', log: '', sido: '서울', q: '', years: 2, rows: null, err
 const SALEROW = new Map();
 let salePin = null;
 async function odPages(path, cond, maxPages) {
-  let key = KEY;
-  try {
-    key = decodeURIComponent(KEY);
-  } catch (e) {}
+  const key = apiKey();
   const all = [];
   for (let page = 1; page <= maxPages; page++) {
     const q = new URLSearchParams({ page, perPage: 500, serviceKey: key });
