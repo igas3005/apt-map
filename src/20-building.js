@@ -55,23 +55,11 @@ function parseAny(text) {
   return { items, total: +g('totalCount') || items.length };
 }
 async function callAny(group, params) {
-  let key = KEY;
-  try {
-    key = decodeURIComponent(KEY);
-  } catch (e) {}
   const order = group.ok != null ? [group.ok] : group.urls.map((_, i) => i);
   let last;
   for (const i of order) {
     try {
-      let r;
-      try {
-        r = await fetch('https://apis.data.go.kr/1613000/' + group.urls[i] + '?' + new URLSearchParams(Object.assign({ ServiceKey: key }, params)));
-      } catch (e) {
-        throw { kind: 'net' };
-      }
-      if (r.status === 401 || r.status === 403) throw { kind: 'key', msg: 'HTTP ' + r.status };
-      if (!r.ok) throw { kind: 'api', msg: 'HTTP ' + r.status };
-      const out = parseAny(await r.text());
+      const out = await apiPage('https://apis.data.go.kr/1613000/' + group.urls[i], params, 'ServiceKey');
       group.ok = i;
       return out;
     } catch (e) {
@@ -142,47 +130,19 @@ async function fetchBld(c) {
 async function fetchLedger(c, rc, purp) {
   const m = c.jibun.match(/^(산)?(\d+)(?:-(\d+))?$/);
   if (!m) return 0;
-  let key = KEY;
-  try {
-    key = decodeURIComponent(KEY);
-  } catch (e) {}
   const rows = [];
   for (let page = 1; page <= 4; page++) {
-    const u =
-      BLD_API +
-      '?' +
-      new URLSearchParams({
-        serviceKey: key,
-        sigunguCd: rc.slice(0, 5),
-        bjdongCd: rc.slice(5, 10),
-        platGbCd: m[1] ? '1' : '0',
-        bun: m[2].padStart(4, '0'),
-        ji: (m[3] || '0').padStart(4, '0'),
-        numOfRows: 100,
-        pageNo: page,
-      });
-    let r;
-    try {
-      r = await fetch(u);
-    } catch (e) {
-      throw { kind: 'net' };
-    }
-    if (r.status === 401 || r.status === 403) throw { kind: 'key', msg: 'HTTP ' + r.status };
-    if (!r.ok) throw { kind: 'api', msg: 'HTTP ' + r.status };
-    const doc = new DOMParser().parseFromString(await r.text(), 'text/xml');
-    const g = t => {
-      const e = doc.getElementsByTagName(t)[0];
-      return e ? e.textContent.trim() : '';
-    };
-    if (doc.documentElement.nodeName.indexOf('OpenAPI') === 0 || g('returnAuthMsg')) throw { kind: 'key', msg: g('returnAuthMsg') || g('errMsg') };
-    const rcode = g('resultCode');
-    if (rcode && rcode !== '00' && rcode !== '000') throw { kind: 'api', msg: rcode + ' ' + g('resultMsg') };
-    const items = [...doc.getElementsByTagName('item')];
-    for (const it of items) {
-      const v = t => {
-        const e = it.getElementsByTagName(t)[0];
-        return e ? e.textContent.trim() : '';
-      };
+    const out = await apiPage(BLD_API, {
+      sigunguCd: rc.slice(0, 5),
+      bjdongCd: rc.slice(5, 10),
+      platGbCd: m[1] ? '1' : '0',
+      bun: m[2].padStart(4, '0'),
+      ji: (m[3] || '0').padStart(4, '0'),
+      numOfRows: 100,
+      pageNo: page,
+    });
+    for (const o of out.items) {
+      const v = k => String(o[k] == null ? '' : o[k]).trim();
       rows.push({
         main: v('mainAtchGbCd') !== '1',
         pu: v('mainPurpsCdNm') + ' ' + v('etcPurps'),
@@ -192,7 +152,7 @@ async function fetchLedger(c, rc, purp) {
         y: +v('useAprDay').slice(0, 4) || 0,
       });
     }
-    if (page * 100 >= (+g('totalCount') || 0) || !items.length) break;
+    if (page * 100 >= out.total || !out.items.length) break;
   }
   let use = rows.filter(x => x.main && x.hh > 0);
   if (!use.length) use = rows.filter(x => x.main);

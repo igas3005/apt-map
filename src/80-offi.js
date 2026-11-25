@@ -24,50 +24,17 @@ const yearOfG = g => {
 const passYear = g => !S.oyear || (yearOfG(g) > 0 && S.asOf.getFullYear() - yearOfG(g) <= S.oyear); // 준공연도 필터: N년 이내 (연도 모르면 제외)
 const obandOf = () => OBANDS.find(b => b.k === S.band) || OBANDS[0];
 const fl2 = a => Math.floor(a + 1e-6); // 전용면적은 소수점 버림으로 묶는다 (59.97→59, 84.97→84)
-async function pool(arr, n, fn) {
-  let i = 0;
-  await Promise.all(
-    Array.from({ length: n }, async () => {
-      while (i < arr.length) {
-        const x = arr[i++];
-        await fn(x);
-      }
-    }),
-  );
-}
-async function offiRows(f, ym) {
-  // 한 달치 → [읍면동, 지번, 건물명, 시군구명, 건축년도, 계약일, 전용㎡, 층, 만원] (해제 거래 제외)
-  let key = KEY;
-  try {
-    key = decodeURIComponent(KEY);
-  } catch (e) {
-    key = KEY;
-  }
-  const rows = [];
-  for (let page = 1; page <= 5; page++) {
-    let r;
-    try {
-      r = await fetch(OFFI_API + '?' + new URLSearchParams({ serviceKey: key, LAWD_CD: f, DEAL_YMD: ym, pageNo: page, numOfRows: 1000 }));
-    } catch (e) {
-      throw { kind: 'net' };
-    }
-    if (r.status === 401 || r.status === 403) throw { kind: 'key', msg: 'HTTP ' + r.status };
-    if (!r.ok) throw { kind: 'api', msg: 'HTTP ' + r.status };
-    const out = parseAny(await r.text());
-    for (const o of out.items) {
-      if (String(o.cdealType || '').toUpperCase() === 'O' || o.cdealDay) continue;
-      const amt = parseInt(String(o.dealAmount || '').replace(/,/g, ''), 10),
-        area = Math.round(parseFloat(o.excluUseAr) * 100) / 100;
-      const ymd = +o.dealYear * 10000 + +o.dealMonth * 100 + +o.dealDay;
-      if (!amt || !area || !ymd) continue;
-      rows.push([o.umdNm || '', o.jibun || '', o.offiNm || '', o.sggNm || '', +o.buildYear || 0, ymd, area, parseInt(o.floor, 10) || 0, amt]);
-    }
-    if (page * 1000 >= out.total || !out.items.length) break;
-  }
-  return rows;
-}
+// 오피스텔 한 달치 → [읍면동, 지번, 건물명, 시군구명, 건축년도, 계약일, 전용㎡, 층, 만원] (해제 거래 제외)
+const offiRow = o => {
+  const amt = dealAmt(o),
+    area = dealArea(o),
+    ymd = dealYmd(o);
+  if (!amt || !area || !ymd) return null;
+  return [o.umdNm || '', o.jibun || '', o.offiNm || '', o.sggNm || '', +o.buildYear || 0, ymd, area, parseInt(o.floor, 10) || 0, amt];
+};
+const offiRows = (f, ym) => rtMonth(OFFI_API, f, ym, offiRow);
 async function offiMonth(f, ym) {
-  // 한 달치를 끝까지 받은 뒤에만 반영 (중간 실패 시 중복 방지)
+  // 한 달치를 끝까지 받은 뒤에만 반영 (중간 실패 시 중복 방지). 다 받았다는 표시는 ensureMonths가 한다.
   for (const [umd, jibun, nm, sgg, by, ymd, area, floor, amt] of await cachedMonth('offi', f, ym, () => offiRows(f, ym))) {
     const k = f + '|' + umd + '|' + jibun + '|' + nn(nm);
     let g = OFFI.get(k);
@@ -75,45 +42,16 @@ async function offiMonth(f, ym) {
     if (by) g.by = by;
     g.trades.push([ymd, area, floor, amt]);
   }
-  ODONE.add(f + '|' + ym);
 }
-const offiOnce = (f, ym) => {
-  const k = f + '|' + ym;
-  if (ODONE.has(k)) return Promise.resolve();
-  if (!OPEND.has(k))
-    OPEND.set(
-      k,
-      offiMonth(f, ym).finally(() => OPEND.delete(k)),
-    );
-  return OPEND.get(k);
-};
-async function ensureOffi(codes, months) {
-  const seen = new Set(),
-    jobs = [];
-  for (const c of codes)
-    for (const f of [c].concat(LEGACY[c] || []))
-      for (const ym of monthList(months || S.months)) {
-        const k = f + '|' + ym;
-        if (!ODONE.has(k) && !seen.has(k)) {
-          seen.add(k);
-          jobs.push([f, ym]);
-        }
-      }
-  let err = null,
-    done = 0;
-  const tot = jobs.length;
-  await pool(jobs, 3, async j => {
-    if (err) return;
-    try {
-      await offiOnce(j[0], j[1]);
-    } catch (e) {
-      err = e;
-    }
-    done++;
-    if (!err) status(`오피스텔 실거래 조회 중… ${done}/${tot}`);
+const ensureOffi = (codes, months) =>
+  ensureMonths({
+    codes,
+    months: months || S.months,
+    done: ODONE,
+    pend: OPEND,
+    run: offiMonth,
+    progress: (n, tot) => status(`오피스텔 실거래 조회 중… ${n}/${tot}`),
   });
-  return err;
-}
 function regionAt(lat, lon) {
   const k = lat.toFixed(3) + ',' + lon.toFixed(3);
   if (OREG.has(k)) return Promise.resolve(OREG.get(k));

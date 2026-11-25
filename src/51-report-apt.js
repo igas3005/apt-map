@@ -22,22 +22,7 @@ async function makeReport(detail) {
     if (!steps.length) steps.push(S.rad);
     const near = nearby(S.center.lat, S.center.lon, Math.max(MAXR, S.rad));
     if (!near.length) throw new Error('대상지 주변에 단지 목록에 등록된 아파트가 없어요.');
-    const fetchInfo = async (list, label) => {
-      let k = 0,
-        dn = 0;
-      const w = async () => {
-        while (k < list.length && !bldErr) {
-          const c = list[k++];
-          try {
-            BLDC.put(bkey(c), await fetchBld(c));
-          } catch (e) {
-            if (e.kind === 'key' || e.kind === 'net') bldErr = e;
-          }
-          status(`기초자료 준비 중… ${label} ${++dn}/${list.length}`);
-        }
-      };
-      await Promise.all([w(), w(), w()]);
-    };
+    const fetchInfo = (list, label) => fillBld(list, bkey, fetchBld, `기초자료 준비 중… ${label}`);
     const yearOf = c => BY.get(c.id) || (BLD[bkey(c)] && BLD[bkey(c)][1]) || 0;
     const mk = c => {
       const all = tradesOf(c.id),
@@ -66,7 +51,7 @@ async function makeReport(detail) {
       cand = near.filter(i => i.d <= R).map(i => C[i.id]);
       radUsed = R;
       const cs = new Set(cand.map(c => c.code));
-      status(`기초자료 준비 중… 반경 ${R >= 1000 ? R / 1000 + 'km' : R + 'm'} 실거래 조회 (단지 ${cand.length}개)`);
+      status(`기초자료 준비 중… 반경 ${radiusTxt(R)} 실거래 조회 (단지 ${cand.length}개)`);
       await ensureTrades(cs, 24);
       if (S.liveErr) throw new Error(liveErrText(S.liveErr));
       await fetchInfo(cand.filter(c => !BY.get(c.id) && BLD[bkey(c)] === undefined).slice(0, 60), '단지 준공연도 확인');
@@ -80,8 +65,8 @@ async function makeReport(detail) {
     X.err = [];
     await ensureSilv(codes, 24);
     const rows = cand.map(mk),
-      radTxt = radUsed >= 1000 ? radUsed / 1000 + 'km' : radUsed + 'm',
-      radAsk = S.rad >= 1000 ? S.rad / 1000 + 'km' : S.rad + 'm';
+      radTxt = radiusTxt(radUsed),
+      radAsk = radiusTxt(S.rad);
     const umdSet = new Set(cand.map(c => c.umd.split(' ').pop())),
       ym1 = String(cut1).slice(0, 6),
       unmG = new Map();
@@ -119,43 +104,13 @@ async function makeReport(detail) {
     if (cutN) pick = pick.slice(0, 30);
     // 주변 분양 (청약홈): 최근 2년, 반경 3km 이내 → 없으면 같은 시·군 가까운 순 3건
     status('기초자료 준비 중… 주변 분양 단지 확인');
-    let sales = [],
-      saleNote = '',
-      saleFar = false;
-    const noGeo = [];
-    const saleR = Math.max(radUsed, 3000),
-      saleRTxt = saleR / 1000 + 'km';
-    try {
-      const sido = OSIDO[code5.slice(0, 2)],
-        from = String(cut2).replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'),
-        city = d2.split(' ')[0];
-      const rowsS = (await salesOf(sido)).filter(r0 => String(r0.RCRIT_PBLANC_DE || '') >= from && String(r0.HSSPLY_ADRES || '').includes(city));
-      let k = 0;
-      const geo = [];
-      await Promise.all(
-        Array.from({ length: 4 }, async () => {
-          while (k < rowsS.length) {
-            const r0 = rowsS[k++];
-            const p = await geocodeSale(r0.HSSPLY_ADRES, r0.HOUSE_NM);
-            if (p) geo.push({ r0, lat: p[0], lon: p[1], approx: p[2], d: hav(S.center.lat, S.center.lon, p[0], p[1]) });
-            else noGeo.push(r0);
-          }
-        }),
-      );
-      geo.sort((a, b) => a.d - b.d);
-      sales = geo.filter(x => x.d <= saleR);
-      if (!sales.length && geo.length) {
-        sales = geo.slice(0, 3);
-        saleFar = true;
-      }
-      if (!rowsS.length)
-        saleNote =
-          ST.log && !SALES.has(sido) ? '청약홈 서버가 자료를 주지 않아 분양 사례를 넣지 못했습니다.' : '최근 2년 내 청약홈 공고가 없습니다.';
-      else if (!geo.length) saleNote = '분양 단지의 위치를 확인하지 못했습니다.';
-    } catch (e) {
-      saleNote = '청약홈 분양정보를 조회하지 못했습니다.';
-    }
-    sales = sales.slice(0, 9);
+    const {
+      sales,
+      note: saleNote,
+      far: saleFar,
+      noGeo,
+      RTxt: saleRTxt,
+    } = await nearbySales(OSIDO[code5.slice(0, 2)], d2.split(' ')[0], cut2, radUsed);
     status('기초자료 준비 중… PPT 작성');
     await loadScript('https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js');
     const pres = new PptxGenJS();
@@ -201,8 +156,7 @@ async function makeReport(detail) {
         1640,
         1100,
         salePts.map(x => ({ lat: x.lat, lon: x.lon })),
-      ),
-      far = Math.max(...mapPts.map(r => r.d));
+      );
     coverSlide(
       K0,
       mi,
@@ -278,205 +232,47 @@ async function makeReport(detail) {
             .join(', ')}${noK.length > 4 ? ' 외 ' + (noK.length - 4) + '개' : ''}.`
         : '') +
       (nBarAll > 10 ? ` 상위 10개만 표시(전체 ${nBarAll}개).` : '');
-    sl.addText(kBar ? `단지별 ${kBar}㎡ 중위 실거래가 (만원)` : '단지별 평당가 (주력 면적타입 중위, 만원)', {
-      x: LX,
-      y: 2.8,
-      w: 7.4,
-      h: 0.26,
-      fontFace: F,
-      fontSize: 11,
-      bold: true,
-      color: INK,
-      margin: 0,
-      isTextBox: true,
+    barBlock(K0, sl, {
+      title: kBar ? `단지별 ${kBar}㎡ 중위 실거래가 (만원)` : '단지별 평당가 (주력 면적타입 중위, 만원)',
+      name: kBar ? '중위 실거래가' : '평당가',
+      bars,
+      note: barNote,
+      emptyTxt: '기간 내 거래가 없어 차트를 그리지 못했습니다.',
     });
-    if (bars.length)
-      sl.addChart(
-        pres.ChartType.bar,
-        [{ name: kBar ? '중위 실거래가' : '평당가', labels: bars.map(b => b.name), values: bars.map(b => b.v) }],
-        Object.assign(chartBase(), {
-          x: LX,
-          y: 3.08,
-          w: 7.4,
-          h: 3.3,
-          barDir: 'bar',
-          chartColors: [NAVY],
-          showValue: true,
-          dataLabelPosition: 'outEnd',
-          barGapWidthPct: 55,
-          valAxisMinVal: 0,
-        }),
-      );
-    else
-      sl.addText('기간 내 거래가 없어 차트를 그리지 못했습니다.', {
-        x: LX,
-        y: 3.2,
-        w: 7.4,
-        h: 0.3,
-        fontFace: F,
-        fontSize: 10,
-        color: MUTE,
-        margin: 0,
-        isTextBox: true,
-      });
-    sl.addText(barNote, { x: LX, y: 6.45, w: 7.4, h: 0.5, fontFace: F, fontSize: 8.5, color: MUTE, margin: 0, valign: 'top', isTextBox: true });
-    sl.addShape(pres.ShapeType.rect, { x: 8.1, y: 2.72, w: 4.68, h: 4.2, fill: { color: BG }, line: { color: BG, width: 0 } });
-    sl.addText('조사 기준', { x: 8.3, y: 2.85, w: 4.4, h: 0.26, fontFace: F, fontSize: 11, bold: true, color: INK, margin: 0, isTextBox: true });
-    sl.addText(
-      [
-        `범위: 대상지 반경 ${radTxt} 안 아파트 (선택 반경 ${radAsk}${radUsed > S.rad ? ', 비교 단지가 3개 미만이라 확대' : ''})`,
-        `연차: 준공 5년 이내 우선(3개 이상), 아니면 10년 이내, 아니면 전체 → 이번 자료는 ${tier}${tierNote}`,
-        '실거래: 단지별 최근 1년, 1년 내 거래가 없는 단지는 최근 2년',
-        `평당가: 공급면적 기준. 단지별 공급/전용 비율은 K-apt 값을 쓰고, 없는 ${estN}개 단지는 전용 × 1.32로 추정`,
-        noTr.length ? `최근 2년 거래가 없는 단지 ${noTr.length}개는 요약표에만 표시` : '대상 단지 모두 최근 2년 내 거래 있음',
-        `차트: ${kBar ? kBar + '㎡ 거래가 있는 단지만 (같은 면적끼리 비교)' : '주력 면적 평당가 (84·59㎡ 거래 없음)'}${noK.length ? ', 거래 없는 ' + noK.length + '개 제외' : ''}`,
-        `분양: 청약홈 최근 2년 공고, 반경 ${saleRTxt} 이내 ${saleFar ? '없음 → 같은 시·군 가까운 순 ' : ''}${sales.length}건`,
-      ].map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
-      { x: 8.3, y: 3.2, w: 4.33, h: 3.6, fontFace: F, fontSize: 9.5, color: INK, margin: 0, valign: 'top', paraSpaceAfter: 6, isTextBox: true },
-    );
+    criteriaBox(K0, sl, [
+      `범위: 대상지 반경 ${radTxt} 안 아파트 (선택 반경 ${radAsk}${radUsed > S.rad ? ', 비교 단지가 3개 미만이라 확대' : ''})`,
+      `연차: 준공 5년 이내 우선(3개 이상), 아니면 10년 이내, 아니면 전체 → 이번 자료는 ${tier}${tierNote}`,
+      '실거래: 단지별 최근 1년, 1년 내 거래가 없는 단지는 최근 2년',
+      `평당가: 공급면적 기준. 단지별 공급/전용 비율은 K-apt 값을 쓰고, 없는 ${estN}개 단지는 전용 × 1.32로 추정`,
+      noTr.length ? `최근 2년 거래가 없는 단지 ${noTr.length}개는 요약표에만 표시` : '대상 단지 모두 최근 2년 내 거래 있음',
+      `차트: ${kBar ? kBar + '㎡ 거래가 있는 단지만 (같은 면적끼리 비교)' : '주력 면적 평당가 (84·59㎡ 거래 없음)'}${noK.length ? ', 거래 없는 ' + noK.length + '개 제외' : ''}`,
+      `분양: 청약홈 최근 2년 공고, 반경 ${saleRTxt} 이내 ${saleFar ? '없음 → 같은 시·군 가까운 순 ' : ''}${sales.length}건`,
+    ]);
 
     // 위치도
-    sl = page(
-      `대상지에서 ${far < 1000 ? Math.round(far) + 'm' : (far / 1000).toFixed(1) + 'km'} 안에 비교 단지 ${mapPts.length}개, 분양 단지 ${salePts.length}개가 분포`,
-      'LOCATION',
-    );
-    if (mi) sl.addImage({ data: mi.data, x: LX, y: 1.4, w: 8.05, h: 5.4 });
-    sl.addText(
-      mi && mi.tiles
-        ? '원형 번호는 비교 단지(단지 요약표와 동일), 주황 사각형 알파벳은 분양 단지입니다.'
-        : '배경지도를 받지 못해 위치 관계만 표시했습니다. 원형 번호는 비교 단지, 주황 사각형 알파벳은 분양 단지입니다.',
-      { x: LX, y: 6.82, w: 8.2, h: 0.16, fontFace: F, fontSize: 7.5, color: MUTE, margin: 0, isTextBox: true },
-    );
-    const dTxt = d => (d < 1000 ? Math.round(d) + 'm' : (d / 1000).toFixed(1) + 'km'),
-      nC = salePts.length ? 12 : 18;
-    tbl(
-      sl,
-      [['No.', '단지명', '준공', '거리'].map(TH)]
-        .concat(
-          mapPts
-            .slice(0, nC)
-            .map((r, i) => [cell(i + 1, { bold: true, color: NAVY }), cell(r.c.name, { align: 'left' }), cell(r.year || '-'), cell(dTxt(r.d))]),
-        )
-        .concat(
-          salePts
-            .slice(0, 6)
-            .map((x, i) => [
-              cell(String.fromCharCode(65 + i), { bold: true, color: 'E8710A' }),
-              cell(String(x.r0.HOUSE_NM || '') + ' (분양)', { align: 'left' }),
-              cell(String(x.r0.MVN_PREARNGE_YM || '').slice(0, 4) || '-'),
-              cell(dTxt(x.d)),
-            ]),
-        ),
-      8.95,
-      1.4,
-      3.83,
-      [0.45, 2.1, 0.6, 0.68],
-      8.5,
-      0.27,
-    );
-    if (mapPts.length > nC)
-      sl.addText(`${nC + 1}번 이후 ${mapPts.length - nC}개 단지는 단지 요약표 참조`, {
-        x: 8.95,
-        y: 6.7,
-        w: 3.8,
-        h: 0.2,
-        fontFace: F,
-        fontSize: 8,
-        color: MUTE,
-        margin: 0,
-        isTextBox: true,
-      });
+    locationSlide(K0, {
+      mi,
+      pts: mapPts.map(r => ({ name: r.c.name, year: r.year, d: r.d })),
+      salePts,
+      noun: '비교 단지',
+      unit: '개',
+      josa: '가',
+      colName: '단지명',
+      listRef: '단지 요약표',
+      restTxt: (k, m) => `${k}번 이후 ${m}개 단지는 단지 요약표 참조`,
+    });
 
     if (detail) await addDetailSlides(Object.assign({ reg, d2, d3, sido: OSIDO[code5.slice(0, 2)] }, K0));
     // 추이
-    const ms = [];
-    for (let k = 23; k >= 0; k--) {
-      const d = new Date(S.asOf.getFullYear(), S.asOf.getMonth() - k, 1);
-      ms.push(d.getFullYear() * 100 + d.getMonth() + 1);
-    }
-    const allPairs = pick.flatMap(r => r.all.map(t => [r, t]));
-    const byM = ms.map(m => {
-      const v = allPairs.filter(([r, t]) => Math.floor(t[0] / 100) === m);
-      return {
-        m,
-        lab: String(m).slice(2, 4) + '.' + String(m).slice(4),
-        cnt: v.length,
-        p: v.length ? Math.round(med(v.map(([r, t]) => ppy(r, t)))) : null,
-      };
-    });
-    const withP = byM.filter(x => x.p != null);
-    sl = page(
-      mp1
+    const ms = recentMonths(24);
+    trendSlide(K0, {
+      ms,
+      vals: pick.flatMap(r => r.all.map(t => [t[0], ppy(r, t)])),
+      pLabel: '평당가',
+      title: mp1
         ? `최근 12개월 중위 평당가 ${n(mp1)}만원, 직전 12개월 대비 ${chgTxt} · 월평균 거래 ${(pairs1.length / 12).toFixed(1)}건`
         : '최근 2년 거래 추이',
-      'PRICE & VOLUME TREND',
-    );
-    sl.addText('월별 중위 평당가 (만원, 거래가 있는 달만)', {
-      x: LX,
-      y: 1.4,
-      w: 6,
-      h: 0.26,
-      fontFace: F,
-      fontSize: 11,
-      bold: true,
-      color: INK,
-      margin: 0,
-      isTextBox: true,
     });
-    if (withP.length > 1)
-      sl.addChart(
-        pres.ChartType.line,
-        [{ name: '중위 평당가', labels: withP.map(x => x.lab), values: withP.map(x => x.p) }],
-        Object.assign(chartBase(), {
-          x: LX,
-          y: 1.7,
-          w: 6.0,
-          h: 5.1,
-          chartColors: [GOLD],
-          lineSize: 2.25,
-          lineDataSymbolSize: 6,
-          catAxisLabelFontSize: 8,
-        }),
-      );
-    else
-      sl.addText('월별 추이를 그릴 만큼 거래가 없습니다.', {
-        x: LX,
-        y: 1.8,
-        w: 6,
-        h: 0.3,
-        fontFace: F,
-        fontSize: 10,
-        color: MUTE,
-        margin: 0,
-        isTextBox: true,
-      });
-    sl.addText('월별 거래 건수 (최근 24개월)', {
-      x: 6.9,
-      y: 1.4,
-      w: 5.9,
-      h: 0.26,
-      fontFace: F,
-      fontSize: 11,
-      bold: true,
-      color: INK,
-      margin: 0,
-      isTextBox: true,
-    });
-    sl.addChart(
-      pres.ChartType.bar,
-      [{ name: '거래 건수', labels: byM.map(x => x.lab), values: byM.map(x => x.cnt) }],
-      Object.assign(chartBase(), {
-        x: 6.9,
-        y: 1.7,
-        w: 5.88,
-        h: 5.1,
-        barDir: 'col',
-        chartColors: [NAVY],
-        catAxisLabelFontSize: 7.5,
-        barGapWidthPct: 40,
-        valAxisMinVal: 0,
-      }),
-    );
 
     // 단지 요약표
     const sumHead = [
@@ -500,7 +296,7 @@ async function makeReport(detail) {
         a59 = stOf(r, 59);
       return [
         cell(`${pick.indexOf(r) + 1}. ${r.c.name}`, { align: 'left', bold: true }),
-        cell(dTxt(r.d)),
+        cell(distTxt(r.d)),
         cell(r.year || '-'),
         cell(r.hh ? n(r.hh) : '-'),
         cell(r.up ? (r.dn ? `B${r.dn}/` : '') + r.up + 'F' : '-'),
@@ -514,23 +310,18 @@ async function makeReport(detail) {
         cell(r.tr.length ? r.span + '년' : '-'),
       ];
     });
-    for (let i = 0; i < Math.max(sumRows.length, 1); i += 16) {
-      const m84 = det
-          .map(r => stOf(r, 84))
-          .filter(Boolean)
-          .map(x => x.med),
-        rg = v =>
-          !v.length ? '' : Math.round(Math.min(...v)) === Math.round(Math.max(...v)) ? n(v[0]) : n(Math.min(...v)) + '~' + n(Math.max(...v));
-      sl = page(
-        `대상 ${pick.length}개 단지 요약: ${m84.length ? '84㎡ 중위 실거래가 ' + rg(m84) + '만원' : det.length ? '평당가 ' + rg(det.map(r => sumOf(r).ppy)) + '만원' : '거래 없음'}${i ? ' (계속)' : ''}`,
-        'COMPARABLE SET',
-      );
-      tbl(sl, [sumHead].concat(sumRows.slice(i, i + 16)), LX, 1.4, LW, sumW, 9, 0.3);
-      sl.addText(
-        '단위: 만원 · 전용면적은 소수점 버림(84.97㎡→84㎡, 59.98㎡→59㎡) · 평당가는 공급면적 기준(공급/전용은 K-apt 단지 평균, *는 1.32 추정) · 세대수·층수는 K-apt 또는 건축물대장',
-        { x: LX, y: 6.72, w: LW, h: 0.22, fontFace: F, fontSize: 8, color: MUTE, margin: 0, isTextBox: true },
-      );
-    }
+    const m84 = det
+      .map(r => stOf(r, 84))
+      .filter(Boolean)
+      .map(x => x.med);
+    comparablePages(K0, {
+      head: sumHead,
+      rows: sumRows,
+      colW: sumW,
+      title: i =>
+        `대상 ${pick.length}개 단지 요약: ${m84.length ? '84㎡ 중위 실거래가 ' + rangeTxt(n, m84) + '만원' : det.length ? '평당가 ' + rangeTxt(n, det.map(r => sumOf(r).ppy)) + '만원' : '거래 없음'}${i ? ' (계속)' : ''}`,
+      note: '단위: 만원 · 전용면적은 소수점 버림(84.97㎡→84㎡, 59.98㎡→59㎡) · 평당가는 공급면적 기준(공급/전용은 K-apt 단지 평균, *는 1.32 추정) · 세대수·층수는 K-apt 또는 건축물대장',
+    });
 
     // 단지별: 한 쪽에 한 단지 (왼쪽 표, 오른쪽 월별 추이)
     for (const r of det.slice(0, 20)) {
@@ -544,156 +335,38 @@ async function makeReport(detail) {
           : `${c.name}: 전용 ${m.type}㎡ 중위 ${n(m.med)}만원, 평당 ${n(m.ppy)}만원`,
         'COMPLEX PROFILE',
       );
-      sl.addText(
-        [
-          r.year ? `${r.year}년 준공` : '준공연도 미확인',
-          r.hh ? n(r.hh) + '세대' : '',
-          r.up ? (r.dn ? `지하${r.dn}/` : '') + `지상${r.up}층` : '',
-          `${c.umd} ${c.jibun}`,
-          `대상지에서 ${r.d < 1000 ? Math.round(r.d) + 'm' : (r.d / 1000).toFixed(1) + 'km'}`,
-          `최근 ${r.span}년 거래 ${r.tr.length}건`,
-          r.ratio ? `공급/전용 ${r.ratio.toFixed(2)} (K-apt)` : '공급/전용 1.32 (추정)',
-        ]
-          .filter(Boolean)
-          .join('  ·  '),
-        { x: LX, y: 1.3, w: LW, h: 0.26, fontFace: F, fontSize: 10, color: MUTE, margin: 0, isTextBox: true },
-      );
-      const g = new Map();
-      for (const t of r.tr) {
-        const kk = bk(t);
-        (g.get(kk) || g.set(kk, []).get(kk)).push(t);
-      }
+      profileLine(K0, sl, [
+        r.year ? `${r.year}년 준공` : '준공연도 미확인',
+        r.hh ? n(r.hh) + '세대' : '',
+        r.up ? (r.dn ? `지하${r.dn}/` : '') + `지상${r.up}층` : '',
+        `${c.umd} ${c.jibun}`,
+        `대상지에서 ${distTxt(r.d)}`,
+        `최근 ${r.span}년 거래 ${r.tr.length}건`,
+        r.ratio ? `공급/전용 ${r.ratio.toFixed(2)} (K-apt)` : '공급/전용 1.32 (추정)',
+      ]);
       const pri = kk => (kk === 84 ? 0 : kk === 59 ? 1 : 2);
-      const types = [...g.entries()]
+      const types = [...groupByArea(r.tr).entries()]
         .sort((a, b) => b[1].length - a[1].length)
         .slice(0, 5)
         .sort((a, b) => pri(a[0]) - pri(b[0]) || a[0] - b[0]);
-      sl.addText(`면적타입별 요약 (최근 ${r.span}년, 만원 · 84㎡ → 59㎡ 순)`, {
-        x: LX,
-        y: 1.75,
-        w: 7,
-        h: 0.26,
-        fontFace: F,
-        fontSize: 11,
-        bold: true,
-        color: INK,
-        margin: 0,
-        isTextBox: true,
-      });
-      const st = [['전용', '공급(평)', '건수', '최고가', '최저가', '중위가', '평균가', '평당가'].map(TH)].concat(
-        types.map(([kk, v]) => {
-          const am = v.map(t => t[3]);
-          return [
-            cell(kk + '㎡'),
-            cell(pyR(r, kk) + '평'),
-            cell(v.length),
-            cell(n(Math.max(...am))),
-            cell(n(Math.min(...am))),
-            cell(n(med(am)), { bold: true, color: NAVY }),
-            cell(n(mean(am))),
-            cell(n(med(v.map(t => ppy(r, t)))), { bold: true }),
-          ];
-        }),
-      );
-      tbl(sl, st, LX, 2.05, 7.0, [0.8, 0.85, 0.6, 0.95, 0.95, 0.95, 0.95, 0.95], 9, 0.29);
-      const y1 = 2.05 + 0.29 * st.length + 0.28;
-      const ga = new Map();
-      for (const t of r.all) {
-        const kk = bk(t);
-        (ga.get(kk) || ga.set(kk, []).get(kk)).push(t);
-      } // 최근 2년 전체 (최근 5건은 거래가 드문 타입도 채우려고 2년치에서 뽑는다)
+      const ga = groupByArea(r.all); // 최근 2년 전체 (최근 5건은 거래가 드문 타입도 채우려고 2년치에서 뽑는다)
       const tA = ga.has(84) ? 84 : types[0] ? types[0][0] : null,
         tB = ga.has(59) && tA !== 59 ? 59 : (types.find(x => x[0] !== tA) || [null])[0];
-      const recent = k => {
-        const v = (ga.get(k) || []).slice().sort((a, b) => b[0] - a[0]);
-        return [['계약일', '전용 (공급 평)', '층', '거래가(만원)', '평당가(만원)'].map(TH)].concat(
-          v
-            .slice(0, 5)
-            .map(t => [cell(ds(t[0])), cell(`${t[1]}㎡ (${pyR(r, t[1])}평)`), cell(t[2]), cell(n(t[3]), { bold: true }), cell(n(ppy(r, t)))]),
-        );
-      };
-      sl.addText(`${tA}㎡ 최근 실거래 5건 (최근 2년 ${(ga.get(tA) || []).length}건 중)`, {
-        x: LX,
-        y: y1,
-        w: 7,
-        h: 0.26,
-        fontFace: F,
-        fontSize: 11,
-        bold: true,
-        color: INK,
-        margin: 0,
-        isTextBox: true,
-      });
-      tbl(sl, recent(tA), LX, y1 + 0.3, 7.0, [1.2, 2.0, 0.8, 1.6, 1.4], 9, 0.29);
-      const cm = ms
-        .map(mm => {
-          const v = r.all.filter(t => Math.floor(t[0] / 100) === mm);
-          return v.length ? { lab: String(mm).slice(2, 4) + '.' + String(mm).slice(4), p: Math.round(med(v.map(t => ppy(r, t)))) } : null;
-        })
-        .filter(Boolean);
-      sl.addText('월별 중위 평당가 (최근 2년, 만원)', {
-        x: 7.9,
-        y: 1.75,
-        w: 4.9,
-        h: 0.26,
-        fontFace: F,
-        fontSize: 11,
-        bold: true,
-        color: INK,
-        margin: 0,
-        isTextBox: true,
-      });
-      if (cm.length > 1)
-        sl.addChart(
-          pres.ChartType.line,
-          [{ name: '중위 평당가', labels: cm.map(x => x.lab), values: cm.map(x => x.p) }],
-          Object.assign(chartBase(), {
-            x: 7.9,
-            y: 2.05,
-            w: 4.88,
-            h: tB ? 2.25 : 4.75,
-            chartColors: [GOLD],
-            lineSize: 2.25,
-            lineDataSymbolSize: 6,
-            catAxisLabelFontSize: 8,
-          }),
-        );
-      else
-        sl.addText('추이를 그릴 만큼 거래가 없습니다.', {
-          x: 7.9,
-          y: 2.15,
-          w: 4.8,
-          h: 0.3,
-          fontFace: F,
-          fontSize: 10,
-          color: MUTE,
-          margin: 0,
-          isTextBox: true,
-        });
-      if (tB) {
-        sl.addText(`${tB}㎡ 최근 실거래 5건 (최근 2년 ${(ga.get(tB) || []).length}건 중)`, {
-          x: 7.9,
-          y: 4.42,
-          w: 4.88,
-          h: 0.26,
-          fontFace: F,
-          fontSize: 11,
-          bold: true,
-          color: INK,
-          margin: 0,
-          isTextBox: true,
-        });
-        tbl(
-          sl,
-          recent(tB).map((rw, i) => (i ? [rw[0], cell(`${rw[1].text.split(' ')[0]}`), rw[2], rw[3], rw[4]] : rw)),
-          7.9,
-          4.72,
-          4.88,
-          [0.95, 1.0, 0.5, 1.2, 1.23],
-          8.5,
-          0.29,
-        );
-      }
+      profileBody(
+        K0,
+        sl,
+        r,
+        { types, ga, tA, tB, ms, ppy: t => ppy(r, t) },
+        {
+          typeTitle: `면적타입별 요약 (최근 ${r.span}년, 만원 · 84㎡ → 59㎡ 순)`,
+          pyHead: '공급(평)',
+          pyOf: kk => pyR(r, kk) + '평',
+          recentHead: '전용 (공급 평)',
+          recentArea: t => `${t[1]}㎡ (${pyR(r, t[1])}평)`,
+          aPrefix: '',
+          pLabel: '평당가',
+        },
+      );
     }
 
     // 주변 분양 + 분양권·입주권 실거래
@@ -742,37 +415,18 @@ async function makeReport(detail) {
             if (su > 0) pp = n(amt / (su / PY));
           }
         }
-        if (Array.isArray(cmp) && cmp.length && cmp[0].REQ_CNT !== undefined) {
-          const c1 = cmp.filter(z => String(z.SUBSCRPT_RANK_CODE) === '1'),
-            req = c1.reduce((a, z) => a + (+String(z.REQ_CNT).replace(/,/g, '') || 0), 0),
-            ty = new Map();
-          for (const z of c1) ty.set(z.HOUSE_TY, +z.SUPLY_HSHLDCO || 0);
-          const sup = [...ty.values()].reduce((a, z) => a + z, 0);
-          if (sup > 0) cr = (req / sup).toFixed(2) + ' : 1';
-        }
+        cr = compRatio(cmp, false);
       } catch (e) {}
-      const ym =
-        parseInt(
-          String(r0.MVN_PREARNGE_YM || '')
-            .replace(/\D/g, '')
-            .slice(0, 6),
-          10,
-        ) || 0;
+      const ym = saleMoveYm(r0);
       saleRows.push([
         cell(String.fromCharCode(65 + saleRows.length), { bold: true, color: 'E8710A' }),
         cell(r0.RCRIT_PBLANC_DE || '-'),
         cell(r0.HOUSE_NM || '', { align: 'left', bold: true }),
-        cell(
-          String(r0.HSSPLY_ADRES || '')
-            .replace(/^\S+(특별시|광역시|도)\s*/, '')
-            .replace(/\(.*?\)/g, '')
-            .trim(),
-          { align: 'left' },
-        ),
-        cell((x.approx ? '~' : '') + dTxt(x.d)),
+        cell(saleAddr(r0), { align: 'left' }),
+        cell((x.approx ? '~' : '') + distTxt(x.d)),
         cell(n(+r0.TOT_SUPLY_HSHLDCO)),
         cell(r0.MVN_PREARNGE_YM || '-'),
-        cell(ym ? (ym >= ymNow ? '입주 전' : '입주 후') : '-', ym >= ymNow ? { bold: true, color: 'E8710A' } : {}),
+        moveCell(K0, ym, ymNow),
         cell(top),
         cell(pp, { bold: true, color: NAVY }),
         cell(cr),
@@ -780,11 +434,7 @@ async function makeReport(detail) {
     }
     sl = page(
       `반경 ${saleFar ? '밖 ' : saleRTxt + ' 내 '}최근 2년 분양 ${sales.length}건${
-        sales.some(x => {
-          const m = parseInt(String(x.r0.MVN_PREARNGE_YM || '').slice(0, 6), 10) || 0;
-          return m >= ymNow;
-        })
-          ? ` (입주 전 ${sales.filter(x => (parseInt(String(x.r0.MVN_PREARNGE_YM || '').slice(0, 6), 10) || 0) >= ymNow).length}건)`
+        sales.some(x => saleMoveYm(x.r0) >= ymNow) ? ` (입주 전 ${sales.filter(x => saleMoveYm(x.r0) >= ymNow).length}건)`
           : ''
       } · 반경 ${radTxt} 분양권·입주권 거래 ${sv.reduce((a, g) => a + g.tr.length, 0)}건`,
       'NEW SUPPLY & PRE-SALE RIGHTS',
@@ -856,7 +506,7 @@ async function makeReport(detail) {
               return [
                 cell(g.name, { align: 'left', bold: true }),
                 cell(g.addr, { align: 'left' }),
-                cell(dTxt(g.d)),
+                cell(distTxt(g.d)),
                 cell(g.tr.length),
                 cell(b.k + '㎡'),
                 cell(n(med(am)), { bold: true, color: NAVY }),
@@ -1219,49 +869,29 @@ async function makeReport(detail) {
     }
 
     // 기준과 한계
-    sl = page('이 자료의 기준과 한계', 'METHODOLOGY');
-    sl.addShape(pres.ShapeType.rect, { x: LX - 0.12, y: 1.3, w: LW + 0.24, h: 5.62, fill: { color: BG }, line: { color: BG, width: 0 } });
-    sl.addText(
-      [
-        `조사 범위는 대상지 반경 ${radTxt} 안의 아파트 ${cand.length}개 단지입니다. 선택 반경 ${radAsk}에서 시작해 준공 5년 이내 단지가 3개 이상 잡힐 때까지 최대 3km로 넓혔고, 준공 5년 이내 → 10년 이내 → 전체 순으로 3개 이상인 첫 구간만 넣었습니다 (이번 자료: ${tier}, ${pick.length}개${cutN ? `, 가까운 30개만 사용` : ''}).`,
-        `주변 분양은 청약홈 최근 2년 공고 중 반경 ${saleRTxt} 이내(없으면 같은 시·군 가까운 순 3건)를 넣었습니다. 분양 단지 위치는 공급위치 주소(없으면 단지명·지구명·동)를 지도 좌표로 바꾼 값이라 실제와 다소 다를 수 있고(~ 표시는 개략 위치),${noGeo.length ? ` 위치를 찾지 못한 ${noGeo.length}건은 제외했으며,` : ''} '입주 전'은 입주예정월이 기준월 이후인 단지입니다.`,
-        unmN
-          ? `단지 목록(K-apt 기준)에 없어 매칭하지 못해 빠진 최근 1년 거래 ${unmN}건이 있습니다 (반경 내 동 기준, 소규모·도시형·최근 입주 단지 등): ${unmEx}`
-          : '',
-        noYear && tier !== '전체 연차' ? `준공연도를 확인하지 못한 ${noYear}개 단지는 연차 구간 선정에서 제외됐습니다.` : '',
-        '실거래는 국토교통부 신고 자료이며 해제된 거래는 뺐습니다. 최근 두 달은 신고 기한(계약 후 30일) 때문에 건수가 더 늘 수 있습니다.',
-        `평당가는 공급면적 기준입니다. 실거래 자료에는 전용면적만 있어, 기존 단지는 K-apt의 단지 평균 공급/전용 비율을 곱했고(같은 단지 안에서도 타입별로 2~3% 차이가 날 수 있음), 비율이 없는 ${estN}개 단지는 1.32로 추정했습니다. 분양 사례는 청약홈의 주택형별 공급면적을 썼습니다.`,
-        noTr.length
-          ? `최근 2년 거래가 없어 상세에서 뺀 단지: ${noTr
-              .slice(0, 15)
-              .map(r => r.c.name)
-              .join(', ')}${noTr.length > 15 ? ' 외' : ''}`
-          : '',
-        det.length > 20 ? `단지별 상세는 20개까지만 넣었습니다 (전체 ${det.length}개는 요약표 참조).` : '',
-        '분양 자료는 청약홈 아파트 분양공고 기준이며, 오피스텔·도시형생활주택과 무순위·임의공급 별도 공고는 포함하지 않았습니다. 분양권 거래는 국토부 신고 자료입니다.',
-        '분양 사례의 분양가는 84㎡ 주택형(없으면 공급세대가 가장 많은 주택형)의 최고 분양가입니다. 층별 분양가, 발코니 확장비, 중도금 조건은 모집공고문 분석이 필요합니다.',
-        '신축/구축 격차 쪽: 신축은 준공 5년 이내, 구축은 준공 10년 초과로 나눠 같은 전용면적(84㎡·59㎡) 최근 1년 중위가를 비교했고, 분양가 대비 전매 프리미엄은 같은 전용면적대 전매 중위가에서 청약홈 최고 분양가를 뺀 추정값입니다.',
-        detail
-          ? '미분양·인허가·착공 통계는 이 자료에 없습니다. 분양가 밴드는 주변 시세만 근거로 한 참고 산정이며 대상지 상품·브랜드·세대수는 반영하지 않았습니다.'
-          : '인구·세대, 미분양, 인허가 등 통계와 적정 분양가 검토는 이 자료에 없습니다.',
-      ]
-        .filter(Boolean)
-        .map((t, i, a) => ({ text: t, options: { bullet: true, breakLine: i < a.length - 1 } })),
-      {
-        x: LX + 0.12,
-        y: 1.45,
-        w: LW - 0.24,
-        h: 5.35,
-        fontFace: F,
-        fontSize: 11,
-        color: INK,
-        margin: 0,
-        valign: 'top',
-        paraSpaceAfter: 7,
-        isTextBox: true,
-        fit: 'shrink',
-      },
-    );
+    methodSlide(K0, [
+      `조사 범위는 대상지 반경 ${radTxt} 안의 아파트 ${cand.length}개 단지입니다. 선택 반경 ${radAsk}에서 시작해 준공 5년 이내 단지가 3개 이상 잡힐 때까지 최대 3km로 넓혔고, 준공 5년 이내 → 10년 이내 → 전체 순으로 3개 이상인 첫 구간만 넣었습니다 (이번 자료: ${tier}, ${pick.length}개${cutN ? `, 가까운 30개만 사용` : ''}).`,
+      `주변 분양은 청약홈 최근 2년 공고 중 반경 ${saleRTxt} 이내(없으면 같은 시·군 가까운 순 3건)를 넣었습니다. 분양 단지 위치는 공급위치 주소(없으면 단지명·지구명·동)를 지도 좌표로 바꾼 값이라 실제와 다소 다를 수 있고(~ 표시는 개략 위치),${noGeo.length ? ` 위치를 찾지 못한 ${noGeo.length}건은 제외했으며,` : ''} '입주 전'은 입주예정월이 기준월 이후인 단지입니다.`,
+      unmN
+        ? `단지 목록(K-apt 기준)에 없어 매칭하지 못해 빠진 최근 1년 거래 ${unmN}건이 있습니다 (반경 내 동 기준, 소규모·도시형·최근 입주 단지 등): ${unmEx}`
+        : '',
+      noYear && tier !== '전체 연차' ? `준공연도를 확인하지 못한 ${noYear}개 단지는 연차 구간 선정에서 제외됐습니다.` : '',
+      '실거래는 국토교통부 신고 자료이며 해제된 거래는 뺐습니다. 최근 두 달은 신고 기한(계약 후 30일) 때문에 건수가 더 늘 수 있습니다.',
+      `평당가는 공급면적 기준입니다. 실거래 자료에는 전용면적만 있어, 기존 단지는 K-apt의 단지 평균 공급/전용 비율을 곱했고(같은 단지 안에서도 타입별로 2~3% 차이가 날 수 있음), 비율이 없는 ${estN}개 단지는 1.32로 추정했습니다. 분양 사례는 청약홈의 주택형별 공급면적을 썼습니다.`,
+      noTr.length
+        ? `최근 2년 거래가 없어 상세에서 뺀 단지: ${noTr
+            .slice(0, 15)
+            .map(r => r.c.name)
+            .join(', ')}${noTr.length > 15 ? ' 외' : ''}`
+        : '',
+      det.length > 20 ? `단지별 상세는 20개까지만 넣었습니다 (전체 ${det.length}개는 요약표 참조).` : '',
+      '분양 자료는 청약홈 아파트 분양공고 기준이며, 오피스텔·도시형생활주택과 무순위·임의공급 별도 공고는 포함하지 않았습니다. 분양권 거래는 국토부 신고 자료입니다.',
+      '분양 사례의 분양가는 84㎡ 주택형(없으면 공급세대가 가장 많은 주택형)의 최고 분양가입니다. 층별 분양가, 발코니 확장비, 중도금 조건은 모집공고문 분석이 필요합니다.',
+      '신축/구축 격차 쪽: 신축은 준공 5년 이내, 구축은 준공 10년 초과로 나눠 같은 전용면적(84㎡·59㎡) 최근 1년 중위가를 비교했고, 분양가 대비 전매 프리미엄은 같은 전용면적대 전매 중위가에서 청약홈 최고 분양가를 뺀 추정값입니다.',
+      detail
+        ? '미분양·인허가·착공 통계는 이 자료에 없습니다. 분양가 밴드는 주변 시세만 근거로 한 참고 산정이며 대상지 상품·브랜드·세대수는 반영하지 않았습니다.'
+        : '인구·세대, 미분양, 인허가 등 통계와 적정 분양가 검토는 이 자료에 없습니다.',
+    ]);
 
     await pres.writeFile({ fileName: `시장조사 ${detail ? '상세' : '기초'}자료_${d2.replace(/\s/g, '')}_${d3}_${today.replace(/\./g, '')}.pptx` });
     status(

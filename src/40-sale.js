@@ -35,49 +35,17 @@ function centerRegion() {
     }),
   );
 }
-async function silvRows(f, ym) {
-  // 한 달치 → [읍면동, 지번, 단지명, 시군구명, 계약일, 전용㎡, 층, 만원, 분양권/입주권] (해제 거래 제외)
-  let key = KEY;
-  try {
-    key = decodeURIComponent(KEY);
-  } catch (e) {
-    key = KEY;
-  }
-  const rows = [];
-  for (let page = 1; page <= 5; page++) {
-    let r;
-    try {
-      r = await fetch(SILV_API + '?' + new URLSearchParams({ serviceKey: key, LAWD_CD: f, DEAL_YMD: ym, pageNo: page, numOfRows: 1000 }));
-    } catch (e) {
-      throw { kind: 'net' };
-    }
-    if (r.status === 401 || r.status === 403) throw { kind: 'key', msg: 'HTTP ' + r.status };
-    if (!r.ok) throw { kind: 'api', msg: 'HTTP ' + r.status };
-    const out = parseAny(await r.text());
-    for (const o of out.items) {
-      if (String(o.cdealType || '').toUpperCase() === 'O' || o.cdealDay) continue;
-      const amt = parseInt(String(o.dealAmount || '').replace(/,/g, ''), 10),
-        area = Math.round(parseFloat(o.excluUseAr) * 100) / 100;
-      const ymd = +o.dealYear * 10000 + +o.dealMonth * 100 + +o.dealDay;
-      if (!amt || !area || !ymd) continue;
-      rows.push([
-        o.umdNm || '',
-        o.jibun || '',
-        o.aptNm || o.aptName || '',
-        o.sggNm || '',
-        ymd,
-        area,
-        parseInt(o.floor, 10) || 0,
-        amt,
-        o.ownershipGbn || o.ownershipGbnNm || '',
-      ]);
-    }
-    if (page * 1000 >= out.total || !out.items.length) break;
-  }
-  return rows;
-}
+// 분양권·입주권 한 달치 → [읍면동, 지번, 단지명, 시군구명, 계약일, 전용㎡, 층, 만원, 분양권/입주권] (해제 거래 제외)
+const silvRow = o => {
+  const amt = dealAmt(o),
+    area = dealArea(o),
+    ymd = dealYmd(o);
+  if (!amt || !area || !ymd) return null;
+  return [o.umdNm || '', o.jibun || '', o.aptNm || o.aptName || '', o.sggNm || '', ymd, area, parseInt(o.floor, 10) || 0, amt, o.ownershipGbn || o.ownershipGbnNm || ''];
+};
+const silvRows = (f, ym) => rtMonth(SILV_API, f, ym, silvRow);
 async function silvMonth(f, ym) {
-  // 한 달치를 끝까지 받은 뒤에만 반영 (중간 실패 시 중복 방지)
+  // 한 달치를 끝까지 받은 뒤에만 반영 (중간 실패 시 중복 방지). 다 받았다는 표시는 ensureMonths가 한다.
   for (const [umd, jibun, nm, sgg, ymd, area, floor, amt, own] of await cachedMonth('silv', f, ym, () => silvRows(f, ym))) {
     const t = [ymd, area, floor, amt, own],
       id = matchRow(f, umd, jibun, nm);
@@ -88,40 +56,13 @@ async function silvMonth(f, ym) {
       SILVG.get(k).trades.push(t);
     }
   }
-  SDONE.add(f + '|' + ym);
 }
 async function ensureSilv(codes, months) {
-  const seen = new Set(),
-    jobs = [];
-  for (const c of codes)
-    for (const f of [c].concat(LEGACY[c] || []))
-      for (const ym of monthList(months || S.months)) {
-        const k = f + '|' + ym;
-        if (!SDONE.has(k) && !seen.has(k)) {
-          seen.add(k);
-          jobs.push([f, ym]);
-        }
-      }
-  let k = 0,
-    err = null;
-  const worker = async () => {
-    while (k < jobs.length && !err) {
-      const j = jobs[k++];
-      try {
-        await silvMonth(j[0], j[1]);
-      } catch (e) {
-        err = e;
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: 3 }, worker));
+  const err = await ensureMonths({ codes, months: months || S.months, done: SDONE, pend: SPEND, run: silvMonth });
   if (err) X.err.push('분양권 실거래: ' + (err.kind === 'net' ? '접속 실패' : err.kind + ' ' + (err.msg || '')));
 }
 async function odGet(path, cond) {
-  let key = KEY;
-  try {
-    key = decodeURIComponent(KEY);
-  } catch (e) {}
+  const key = apiKey();
   const q = new URLSearchParams({ page: 1, perPage: 1000, serviceKey: key });
   for (const k in cond) q.set(`cond[${k}]`, cond[k]);
   let r;
@@ -139,10 +80,7 @@ const ST = { meta: '', log: '', sido: '서울', q: '', years: 2, rows: null, err
 const SALEROW = new Map();
 let salePin = null;
 async function odPages(path, cond, maxPages) {
-  let key = KEY;
-  try {
-    key = decodeURIComponent(KEY);
-  } catch (e) {}
+  const key = apiKey();
   const all = [];
   for (let page = 1; page <= maxPages; page++) {
     const q = new URLSearchParams({ page, perPage: 500, serviceKey: key });
