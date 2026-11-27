@@ -123,6 +123,8 @@ async function ensureMonths({ codes, months, done, pend, run, progress, prefix =
           jobs.push([f, ym, k]);
         }
       }
+  RT_STALE.n = 0;
+  RT_STALE.t = 0;
   let err = null,
     n = 0;
   await pool(jobs, 3, async ([f, ym, k]) => {
@@ -141,5 +143,5 @@ async function ensureMonths({ codes, months, done, pend, run, progress, prefix =
 // 키는 정상인데 국토부 서버가 실패했거나(e.retry) 오늘 호출 한도를 넘은(quota) 경우의 안내 문구
 function rtBusyText(name, e) {
   if (e.kind === 'quota') return `오늘 ${name} 실거래 API 호출 한도를 넘었어요 (${e.msg || ''}). 내일 다시 검색하거나 조회 기간을 줄여 보세요.`;
-  return `국토부 ${name} 실거래 서버가 응답을 못 했어요 (${e.msg || ''}). 인증키·활용신청은 정상이에요. 여러 번 다시 시도했지만 실패해서, 잠시 뒤 다시 검색해 보세요.`;
+  return `국토부 ${name} 실거래 서버가 응답을 못 했어요 (${e.msg || ''}). 인증키·활용신청은 정상이에요. 국토부 서버는 밤늦게 자주 멈춰요. 낮에 한 번 본 지역은 저장본으로 보여 주지만, 이 지역은 저장본이 없어요. 내일 다시 검색해 보세요.`;
 }
