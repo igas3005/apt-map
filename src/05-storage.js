@@ -137,19 +137,28 @@ function monthAge(ym) {
   const now = new Date();
   return (now.getFullYear() - +ym.slice(0, 4)) * 12 + (now.getMonth() + 1 - +ym.slice(4, 6));
 }
+// 이번 달·지난달도 저장해 두되 평소엔 쓰지 않고, 국토부 서버가 실패했을 때(밤늦게 자주 생김)만 비상용으로 쓴다.
+// 만료된 저장본도 서버 실패 시에는 쓴다. 쓴 횟수와 가장 오래된 저장 시각은 RT_STALE에 모아 상태줄에 알린다.
+const staleOk = e => e && (e.kind === 'net' || e.kind === 'quota' || e.retry);
 async function cachedMonth(kind, f, ym, fetcher) {
   const age = monthAge(ym),
     key = MONTH_VER + '|' + kind + '|' + f + '|' + ym;
-  if (age >= 2) {
-    const hit = await IDB.get('month', key);
-    if (hit && Date.now() - hit.t < (age <= 3 ? 7 : 30) * DAY) return hit.rows;
+  const hit = await IDB.get('month', key);
+  if (age >= 2 && hit && Date.now() - hit.t < (age <= 3 ? 7 : 30) * DAY) return hit.rows;
+  let rows;
+  try {
+    rows = await fetcher();
+  } catch (e) {
+    if (hit && staleOk(e)) {
+      RT_STALE.n++;
+      if (!RT_STALE.t || hit.t < RT_STALE.t) RT_STALE.t = hit.t;
+      return hit.rows;
+    }
+    throw e;
   }
-  const rows = await fetcher();
-  if (age >= 2) {
-    const t = Date.now();
-    IDB.putMany('month', [[key, { t, rows }]]);
-    IDB.putMany('mtime', [[key, t]]);
-  }
+  const t = Date.now();
+  IDB.putMany('month', [[key, { t, rows }]]);
+  IDB.putMany('mtime', [[key, t]]);
   return rows;
 }
 async function pruneMonths() {

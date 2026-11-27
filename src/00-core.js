@@ -114,8 +114,14 @@ async function getJSON(u) {
   if (!r.ok) throw new Error(u + ' ' + r.status);
   return r.json();
 }
+const RT_STALE = { n: 0, t: 0 }; // 서버 실패로 저장본을 쓴 달 수·가장 오래된 저장 시각 (05-storage.js cachedMonth)
 function status(msg, err) {
   const el = $('#status');
+  // 국토부 서버 실패로 저장본을 쓴 경우, 정상 안내 문구 뒤에 그 사실을 덧붙인다 (RT_STALE: 05-storage.js)
+  if (!err && msg && RT_STALE.n) {
+    const d = new Date(RT_STALE.t);
+    msg += ` · 국토부 서버가 응답하지 않아 ${RT_STALE.n}개월은 저장본(${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')} 기준)으로 표시`;
+  }
   el.textContent = msg || '';
   el.className = 'status' + (err ? ' err' : '');
 }
