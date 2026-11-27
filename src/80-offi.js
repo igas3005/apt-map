@@ -177,6 +177,7 @@ function offiErrText(e) {
       (e.msg || '') +
       '). 공공데이터포털에서 「국토교통부_오피스텔 매매 실거래가 자료」 활용신청이 승인됐는지 확인하세요. 승인 직후에는 반영에 시간이 걸릴 수 있어요.'
     );
+  if (e.kind === 'quota' || e.retry) return rtBusyText('오피스텔', e);
   if (/429/.test(e.msg || '')) return '국토부 API가 요청이 너무 많다며 거절했어요 (HTTP 429). 잠시 뒤 다시 검색해 보세요.';
   return '오피스텔 실거래 조회 오류: ' + (e.msg || '알 수 없음');
 }
