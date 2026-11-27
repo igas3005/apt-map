@@ -147,6 +147,7 @@ function liveErrText(e) {
     return '브라우저에서 국토부 API에 접속하지 못했어요. 브라우저 보안 정책(CORS)이나 사내 네트워크 차단일 수 있어요. 이 문구를 그대로 알려 주세요.';
   if (e.kind === 'key')
     return '인증키 오류예요 (' + (e.msg || '') + '). 키가 맞는지, 공공데이터포털에서 아파트 매매 실거래가 활용신청이 승인됐는지 확인하세요.';
+  if (e.kind === 'quota' || e.retry) return rtBusyText('아파트', e);
   if (/429/.test(e.msg || ''))
     return '국토부 API가 요청이 너무 많다며 거절했어요 (HTTP 429). 잠시 뒤 다시 검색해 보세요. 계속되면 오늘 호출 한도를 넘은 것일 수 있어요.';
   return '실거래 조회 오류: ' + (e.msg || '알 수 없음');

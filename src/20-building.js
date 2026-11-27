@@ -24,6 +24,18 @@ const KAPT_BASE = {
 };
 const KLIST = new Map();
 let kaptErr = null;
+// 공공데이터포털 게이트웨이 오류(OpenAPI_ServiceResponse)를 코드별로 나눈다.
+// 키·권한 문제(20·30·31·32·33)만 'key', 호출 한도(22)는 'quota', 기관 서버·일시 장애(01·04·05·23)는 다시 해 볼 수 있는 'api'.
+// (예전에는 모두 'key'로 봐서, 국토부 서버가 잠깐 실패한 04 "HTTP 에러"도 "권한 오류"로 잘못 안내했다)
+const GW_KEY = new Set(['20', '30', '31', '32', '33']),
+  GW_RETRY = new Set(['01', '04', '05', '23']);
+function gwError(code, msg) {
+  code = String(code || '').trim();
+  const m = (msg || '') + (code ? ' · 코드 ' + code : '');
+  if (GW_KEY.has(code) || !code) return { kind: 'key', msg: m, gw: code };
+  if (code === '22') return { kind: 'quota', msg: m, gw: code };
+  return { kind: 'api', msg: m, gw: code, retry: GW_RETRY.has(code) };
+}
 function parseAny(text) {
   // JSON·XML 어느 쪽으로 와도 [{필드:값}] 로 바꾼다
   const t = text.trim();
@@ -44,7 +56,7 @@ function parseAny(text) {
     return e ? e.textContent.trim() : '';
   };
   if (doc.getElementsByTagName('parsererror').length) throw { kind: 'api', msg: t.slice(0, 80) };
-  if (doc.documentElement.nodeName.indexOf('OpenAPI') === 0 || g('returnAuthMsg')) throw { kind: 'key', msg: g('returnAuthMsg') || g('errMsg') };
+  if (doc.documentElement.nodeName.indexOf('OpenAPI') === 0 || g('returnAuthMsg')) throw gwError(g('returnReasonCode'), g('returnAuthMsg') || g('errMsg'));
   const rc = g('resultCode');
   if (rc && rc !== '00' && rc !== '000') throw { kind: 'api', msg: rc + ' ' + g('resultMsg') };
   const items = [...doc.getElementsByTagName('item')].map(it => {

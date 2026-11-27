@@ -10,16 +10,31 @@ function apiKey() {
   }
 }
 // 한 쪽 요청 → { total, items: [{항목: 값}] } (JSON·XML 모두). 오류는 { kind: 'net' | 'key' | 'api', msg }
-async function apiPage(url, params, keyName = 'serviceKey') {
+// 국토부·게이트웨이가 잠깐 실패한 경우(게이트웨이 01·04·05·23, HTTP 429·5xx)는 0.8초·2초·4초 쉬고 최대 3번 다시 요청한다.
+const API_RETRY_WAIT = [800, 2000, 4000];
+async function apiPageOnce(url, params, keyName) {
   let r;
   try {
     r = await fetch(url + '?' + new URLSearchParams(Object.assign({ [keyName]: apiKey() }, params)));
   } catch (e) {
     throw { kind: 'net' };
   }
+  const text = await r.text().catch(() => '');
+  // 게이트웨이 오류 본문(OpenAPI_ServiceResponse)이 있으면 HTTP 상태보다 그 코드를 먼저 본다
+  if (/OpenAPI_ServiceResponse|returnReasonCode/.test(text)) return parseAny(text);
   if (r.status === 401 || r.status === 403) throw { kind: 'key', msg: 'HTTP ' + r.status };
-  if (!r.ok) throw { kind: 'api', msg: 'HTTP ' + r.status };
-  return parseAny(await r.text());
+  if (!r.ok) throw { kind: 'api', msg: 'HTTP ' + r.status, retry: r.status === 429 || r.status >= 500 };
+  return parseAny(text);
+}
+async function apiPage(url, params, keyName = 'serviceKey') {
+  for (let i = 0; ; i++) {
+    try {
+      return await apiPageOnce(url, params, keyName);
+    } catch (e) {
+      if (!e || !e.retry || i >= API_RETRY_WAIT.length) throw e;
+      await sleep(API_RETRY_WAIT[i]);
+    }
+  }
 }
 
 // 실거래 한 달치: 쪽을 끝까지 넘기며 해제 거래를 빼고, 항목마다 toRow(항목)를 불러 나온 행만 모은다(빈 값이면 버림).
@@ -30,10 +45,23 @@ const dealCanceled = o => String(o.cdealType || '').trim().toUpperCase() === 'O'
 const dealAmt = o => parseInt(String(o.dealAmount || '').replace(/,/g, ''), 10);
 const dealArea = o => Math.round(parseFloat(o.excluUseAr) * 100) / 100;
 const dealYmd = o => +o.dealYear * 10000 + +o.dealMonth * 100 + +o.dealDay;
+// 기관 서버가 한 번에 1,000건 응답을 못 만들고 04 "HTTP 에러"를 내는 경우가 있어(토지·상가 서버), 다시 해도 실패하면
+// 그 API는 이후 한 쪽 200건으로 줄여 처음부터 다시 받는다 (RT_ROWS에 API별로 기억).
+const RT_ROWS = new Map();
 async function rtMonth(url, f, ym, toRow) {
+  try {
+    return await rtMonthRows(url, f, ym, toRow, RT_ROWS.get(url) || 1000);
+  } catch (e) {
+    if (!e || e.kind !== 'api' || !e.retry || (RT_ROWS.get(url) || 1000) <= 200) throw e;
+    RT_ROWS.set(url, 200);
+    return rtMonthRows(url, f, ym, toRow, 200);
+  }
+}
+async function rtMonthRows(url, f, ym, toRow, per) {
   const rows = [];
+  const maxPages = RT_MAX_PAGES * Math.ceil(1000 / per);
   for (let page = 1; ; page++) {
-    const out = await apiPage(url, { LAWD_CD: f, DEAL_YMD: ym, pageNo: page, numOfRows: 1000 });
+    const out = await apiPage(url, { LAWD_CD: f, DEAL_YMD: ym, pageNo: page, numOfRows: per });
     let used = 0,
       canceled = 0;
     for (const o of out.items) {
@@ -48,8 +76,8 @@ async function rtMonth(url, f, ym, toRow) {
       }
     }
     if (out.items.length && !used && !canceled) throw { kind: 'api', msg: '응답 항목 이름이 예상과 달라요: ' + Object.keys(out.items[0]).join(', ') };
-    if (page * 1000 >= out.total || !out.items.length) break;
-    if (page >= RT_MAX_PAGES) throw { kind: 'api', msg: `${f} ${ym} 거래가 ${RT_MAX_PAGES * 1000}건을 넘어 다 받지 못했어요` };
+    if (page * per >= out.total || !out.items.length) break;
+    if (page >= maxPages) throw { kind: 'api', msg: `${f} ${ym} 거래가 ${RT_MAX_PAGES * 1000}건을 넘어 다 받지 못했어요` };
   }
   return rows;
 }
@@ -108,4 +136,10 @@ async function ensureMonths({ codes, months, done, pend, run, progress, prefix =
     if (!err && progress) progress(n, jobs.length);
   });
   return err;
+}
+
+// 키는 정상인데 국토부 서버가 실패했거나(e.retry) 오늘 호출 한도를 넘은(quota) 경우의 안내 문구
+function rtBusyText(name, e) {
+  if (e.kind === 'quota') return `오늘 ${name} 실거래 API 호출 한도를 넘었어요 (${e.msg || ''}). 내일 다시 검색하거나 조회 기간을 줄여 보세요.`;
+  return `국토부 ${name} 실거래 서버가 응답을 못 했어요 (${e.msg || ''}). 인증키·활용신청은 정상이에요. 여러 번 다시 시도했지만 실패해서, 잠시 뒤 다시 검색해 보세요.`;
 }
