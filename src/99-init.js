@@ -211,6 +211,23 @@ async function init() {
   map = new kakao.maps.Map($('#map'), { center: new kakao.maps.LatLng(37.5665, 126.978), level: 8 });
   map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
   map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
+  // 지적편집도(용도지역 색 구분) 겹쳐 보기 — 카카오 기본 레이어, 켜짐 여부는 브라우저에 기억
+  const distBtn = document.createElement('button');
+  distBtn.className = 'distbtn';
+  distBtn.type = 'button';
+  distBtn.textContent = '지적편집도';
+  distBtn.title = '용도지역(주거·상업·공업·녹지)을 색으로 겹쳐 보기';
+  const setDistrict = on => {
+    if (on) map.addOverlayMapTypeId(kakao.maps.MapTypeId.USE_DISTRICT);
+    else map.removeOverlayMapTypeId(kakao.maps.MapTypeId.USE_DISTRICT);
+    distBtn.classList.toggle('on', on);
+    try { localStorage.setItem('use_district', on ? '1' : '0'); } catch (e) {}
+  };
+  distBtn.addEventListener('click', () => setDistrict(!distBtn.classList.contains('on')));
+  $('#map').appendChild(distBtn);
+  let distOn = false;
+  try { distOn = localStorage.getItem('use_district') === '1'; } catch (e) {}
+  if (distOn) setDistrict(true);
   geocoder = new kakao.maps.services.Geocoder();
   places = new kakao.maps.services.Places();
   kakao.maps.event.addListener(map, 'zoom_changed', () => renderPins());
